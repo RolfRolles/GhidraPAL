@@ -413,7 +413,7 @@ class TVLBitVector {
 			AbsValue[i] = TVL_HALF;
 	}
 	
-	static final char[] Representation = { "0", "?", "1" };
+	static final char[] Representation = { '0', '?', '1' };
 	
 	// Print the bit-vector as a series of bytes, with "?" used for 1/2 bits.
 	@Override
@@ -874,7 +874,7 @@ final class TVLBitVectorUtil {
 		int s1 = lhs.Size();
 		int s2 = rhs.Size();
 		if(s1 != s2)
-			SizeMismatchException("AddInternal(_,_,"+isSub+","+initialCarry+")", s1, s2);
+			SizeMismatchException("AddInternal(_,_,"+isSub+")", s1, s2);
 		
 		// Create bitvectors for the sum and carry amounts.
 		TVLBitVector sum      = Map(lhs, (x) -> TVLBitVector.TVL_0);
