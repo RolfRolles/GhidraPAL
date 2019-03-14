@@ -1281,21 +1281,6 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	// Below here are the abstract interpretations of the pcode operations.
 	//
 	
-	// I still don't know what to do with these. That's mostly due to laziness in
-	// not having read the specification fully. Some of them can probably be 
-	// implemented cleanly and precisely; others I'm not so sure.
-	// * PcodeOp.CAST
-	// * PcodeOp.CPOOLREF
-	// * PcodeOp.INDIRECT
-	// * PcodeOp.MULTIEQUAL
-	// * PcodeOp.NEW
-	// * PcodeOp.PIECE
-	// * PcodeOp.PTRADD
-	// * PcodeOp.PTRSUB
-	// * PcodeOp.SEGMENTOP
-	// * PcodeOp.SUBPIECE
-	// * PcodeOp.UNIMPLEMENTED
-	
 	// For the branch instructions, I think it makes sense to treat this 
 	// container class as being an intermediary class in a hierarchy, so as to
 	// simplify applying the analysis in local vs. global contexts. I.e. leave
@@ -1309,6 +1294,11 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	// * PcodeOp.CBRANCH
 	// * PcodeOp.RETURN
 
+	// Are these described in the documentation? Currently I let them throw 
+	// exceptions.
+	// * PcodeOp.SEGMENTOP
+	// * PcodeOp.UNIMPLEMENTED
+	
 	// For now, for unhandled PcodeOp types that write to Varnodes, we just set 
 	// the output to Top. Future work: implement them in the case that their 
 	// source Varnodes are known to be constant.
@@ -1561,6 +1551,20 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		AbstractState.Associate(output, result);
 	}; 
 
+	// I think I can implement this, once I'm sure I understand it precisely.
+	// For now, unhandled.
+	void visit_PIECE            (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// I think I can implement this, once I'm sure I understand it precisely.
+	// For now, unhandled.
+	void visit_SUBPIECE         (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
 	// Floating point boolean-returning operations, all unhandled (set to top)
 	void visit_FLOAT_EQUAL      (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
@@ -1636,6 +1640,56 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	{
 		SetOutputToTop(pcode.getOutput());
 	}; 
+
+	// "Pseudo" operations. Unhandled, set output to top.
+	void visit_NEW              (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	
+	// Based on the description, I could probably handle this one? Look the value
+	// up in the constant pool and return it precisely.
+	void visit_CPOOLREF         (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	
+	// "Additional" operations. From the descriptions, I might even be able to
+	// implement all of these...?
+	
+	// For now, I have implemented CAST, anyway.
+	void visit_CAST             (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{ 
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		AbstractState.Associate(pcode.getOutput(), lhs);		
+	}; 
+
+	// I can probably just implement this in terms of addition and multiplication?
+	void visit_PTRADD           (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// I can probably just implement this in terms of addition and multiplication?
+	void visit_PTRSUB           (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// Simply perform a "join" on all of the incoming values?
+	void visit_MULTIEQUAL       (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// This one I understand less, so my ideas of how to handle it in the future
+	// are more vague. Perhaps I could implment it.
+	void visit_INDIRECT         (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+
 }
 
 // Finally, the top-level script functionality. For now, it's just a demo of 
