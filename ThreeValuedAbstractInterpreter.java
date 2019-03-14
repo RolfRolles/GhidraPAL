@@ -631,10 +631,17 @@ final class TVLBitVectorUtil {
 	}
 
 	// Create a byte-sized three-valued bitvector with a constant lowest bit.
+	static TVLBitVector CreateHalfBit()
+	{
+		return CreateSingle(TVLBitVector.TVL_HALF);
+	}
+
+	// Create a byte-sized three-valued bitvector with a constant lowest bit.
 	static TVLBitVector CreateBit(boolean bit)
 	{
 		return CreateSingle(bit ? TVLBitVector.TVL_1 : TVLBitVector.TVL_0);
 	}
+	
 	
 	// Helper method for three-valued abstract equality comparisons. Basically,
 	// if any two bits at the same position are constants, and the constants 
@@ -1302,22 +1309,63 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	// * PcodeOp.CBRANCH
 	// * PcodeOp.RETURN
 
-	// I probably just want to AbstractState.Associate Top with the destination for these, 
-	// unless the values are constant, in which case I can use the raw constant
-	// value. Same goes for all of the FLOAT_ operations. In fact, the same could
-	// go for all operations, period -- use concrete operations if the values are
-	// known to be constant. Would complicate the code considerably, but would 
-	// also be a performance optimization.
-	void visit_INT_DIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException { VisitorUnimplemented("INT_DIV"); }; 
-	void visit_INT_REM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException { VisitorUnimplemented("INT_REM"); }; 
-	void visit_INT_SDIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException { VisitorUnimplemented("INT_SDIV"); }; 
-	void visit_INT_SREM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException { VisitorUnimplemented("INT_SREM"); }; 
+	// For now, for unhandled PcodeOp types that write to Varnodes, we just set 
+	// the output to Top. Future work: implement them in the case that their 
+	// source Varnodes are known to be constant.
+	void SetOutputToTop(Varnode output)
+	{
+		TVLBitVector result = new TVLBitVector(new GhidraSizeAdapter(output.getSize()));
+		AbstractState.Associate(output, result);
+
+	}
 	
-	// I think I can implement these, I just need to make sure I understand them.
-	// Obviously, a test suite would help with that.
-	void visit_INT_CARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException { VisitorUnimplemented("INT_CARRY"); }; 
-	void visit_INT_SBORROW(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException { VisitorUnimplemented("INT_SBORROW"); }; 
-	void visit_INT_SCARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException { VisitorUnimplemented("INT_SCARRY"); }; 
+	// Same, but for boolean quantities
+	void SetOutputToTopBool(Varnode output)
+	{
+		AbstractState.Associate(output, TVLBitVectorUtil.CreateHalfBit());
+	}
+	
+	// Unhandled, set top (future: if constant, use constant values)
+	void visit_INT_DIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// Unhandled, set top (future: if constant, use constant values)
+	void visit_INT_REM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// Unhandled, set top (future: if constant, use constant values)
+	void visit_INT_SDIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// Unhandled, set top (future: if constant, use constant values)
+	void visit_INT_SREM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 	
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+
+	// Unhandled, set top. Can implement in the future.
+	void visit_INT_CARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
+
+	// Unhandled, set top. Can implement in the future.
+	void visit_INT_SBORROW(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
+
+	// Unhandled, set top. Can implement in the future.
+	void visit_INT_SCARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
 
 	// These should be changed to maintain separate memory objects based upon
 	// the Varnode that dictates the space underlying the load/store.
@@ -1512,16 +1560,92 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		TVLBitVector result = TVLBitVectorUtil.ZeroExtend(lhs, new GhidraSizeAdapter(output.getSize()));
 		AbstractState.Associate(output, result);
 	}; 
+
+	// Floating point boolean-returning operations, all unhandled (set to top)
+	void visit_FLOAT_EQUAL      (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
+	void visit_FLOAT_NOTEQUAL   (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
+	void visit_FLOAT_LESS       (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
+	void visit_FLOAT_LESSEQUAL  (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
+	void visit_FLOAT_NAN        (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTopBool(pcode.getOutput());
+	}; 
+
+	// Floating point non boolean-returning operations, all unhandled (set to top)
+	void visit_FLOAT_ADD        (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_SUB        (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_MULT       (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_DIV        (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_NEG        (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_ABS        (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_SQRT       (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_CEIL       (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_FLOOR      (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_ROUND      (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_FLOAT2FLOAT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_INT2FLOAT  (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
+	void visit_FLOAT_TRUNC      (Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		SetOutputToTop(pcode.getOutput());
+	}; 
 }
 
 // Finally, the top-level script functionality. For now, it's just a demo of 
 // the analysis.
 public class ThreeValuedAbstractInterpreter extends GhidraScript {
 
-	void AbstractInterpret(boolean isBigEndian, InstructionIterator instructions, boolean setTF, int TFvalue, boolean debug) throws Exception
+	void AbstractInterpret(InstructionIterator instructions, boolean setTF, int TFvalue, boolean debug) throws Exception
 	{
-		TVLAbstractInterpreter visitor = new TVLAbstractInterpreter(isBigEndian);
 		Language l = currentProgram.getLanguage();
+		TVLAbstractInterpreter visitor = new TVLAbstractInterpreter(l.isBigEndian());
 		VarnodeTranslator vt = new VarnodeTranslator​(currentProgram);
 		
 		// Get Register/Varnode objects for designated x86 registers
@@ -1611,17 +1735,16 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 			set = currentProgram.getMemory().getExecuteSet();
 		}
 		
-		boolean isBigEndian = currentProgram.getLanguage().isBigEndian();
 		boolean debug = false;
 		
 		// Abstract interpret under the assumption that TF = 0.
-		AbstractInterpret(isBigEndian, currentProgram.getListing().getInstructions(set, true), true,  0, debug);
+		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
 
 		// Abstract interpret under the assumption that TF = 1.
-		AbstractInterpret(isBigEndian, currentProgram.getListing().getInstructions(set, true), true,  1, debug);
+		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, debug);
 
 		// Abstract interpret under the assumption that TF has not been set.
-		AbstractInterpret(isBigEndian, currentProgram.getListing().getInstructions(set, true), false, 0, debug);
+		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
 	}
 }
 
