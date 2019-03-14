@@ -11,10 +11,6 @@
 // * Perhaps an analysis-level change (relatively major code consequences)
 // * Perhaps change the visitor to an interface (medium)
 // * Encapsulate analysis-level variation in handling of branches (medium)
-// * Definitely improve handling of Varnodes -- there's an important 
-//   correctness bug at present (minor)
-// * Definitely alter the load/store code to take endianness into account --
-//   another important correctness bug (presumably minor)
 // * Performance/algorithmic optimizations (medium)
 // * Make unsupported operations return top (minor)
 // * Add tests (minor consequences, unless major errors revealed)
@@ -1019,16 +1015,14 @@ final class TVLBitVectorUtil {
 // place outside of this class). This class follows the pure-functional 
 // paradigm where each store creates a new memory. That's necessary, although
 // could be algorithmically improved by eliminating intermediate copies.
-//
-// Currently doesn't take endianness into account -- that should probably be a
-// parameter to the constructor, once I figure out how to query that 
-// information about a particular Varnode namespace.
 class AbstractMemory {
 	
 	// Memory is just a hash map from addresses to 8-bit bitvectors.
 	HashMap<Long,TVLBitVector> Contents;
-	public AbstractMemory() {
+	private boolean bigEndian;
+	public AbstractMemory(boolean isBigEndian) {
 		Contents = new HashMap<>();
+		bigEndian = isBigEndian;
 	}
 	
 	// Debugging.
@@ -1039,37 +1033,53 @@ class AbstractMemory {
 		//	Printer.println("Key = " + entry.getKey() + ", Value = " + entry.getValue()); 
 	}
 	
-	// Store a byte to the specified location, and return a new, updated memory.
-	AbstractMemory Store(long addr, TVLBitVector bv)
+	public AbstractMemory clone()
 	{
 		HashMap<Long,TVLBitVector> newContents = (HashMap)Contents.clone();
-		newContents.put(addr,bv);
-		AbstractMemory newMemory = new AbstractMemory();
+		AbstractMemory newMemory = new AbstractMemory(bigEndian);
 		newMemory.Contents = newContents;
 		return newMemory;
+	}
+	
+	// Store a byte to the specified location.
+	void Store(long addr, TVLBitVector bv)
+	{
+		Contents.put(addr,bv);
+		//HashMap<Long,TVLBitVector> newContents = (HashMap)Contents.clone();
+		//AbstractMemory newMemory = new AbstractMemory();
+		//newMemory.Contents = newContents;
+		//return newMemory;
 	}
 	
 	// Return a new memory, entirely unknown.
 	AbstractMemory Top()
 	{
-		return new AbstractMemory();
+		return new AbstractMemory(bigEndian);
 	}
 
 	// Store a multi-byte quantity into memory and return a new one. Could 
 	// improve by only duplicating once, or by using an applicative dictionary.
 	// Currently assumes little-endianness.
-	AbstractMemory StoreWholeQuantity(long addr, TVLBitVector bv)
+	void StoreWholeQuantity(long addr, TVLBitVector bv)
 	{
-		AbstractMemory am = this;
 		byte[] bvArr = bv.Value();
-		for(int i = 0; i < bv.Size(); i += 8)
+		int bvSize = bv.Size();
+		for(int i = 0; i < bvSize; i += 8)
 		{
-			byte[] subArr = Arrays.copyOfRange(bvArr, i, i+8);
-			am = am.Store(addr, new TVLBitVector(subArr));
+			byte[] subArr;
+			if(bigEndian)
+				subArr = Arrays.copyOfRange(bvArr, bvSize-(i+8), bvSize-i);
+			else
+				subArr = Arrays.copyOfRange(bvArr, i, i+8);
+			Store(addr, new TVLBitVector(subArr));
 			addr += 1;
 		}
-		am.Dump("StoreWholeQuantity(): "+addr+" "+bv);
-		return am;
+		Dump("StoreWholeQuantity(): "+addr+" "+bv);
+	}
+	
+	void StoreWholeQuantity(Varnode dest, TVLBitVector bv)
+	{
+		StoreWholeQuantity(dest.getOffset(), bv);
 	}
 	
 	// Load one byte, or return top if the address was unmapped.
@@ -1090,7 +1100,11 @@ class AbstractMemory {
 		LinkedList<TVLBitVector> list = new LinkedList<TVLBitVector>(); 
 		for(int i = 0; i < size; i += 8)
 		{
-			list.add(Lookup(addr));
+			TVLBitVector val = Lookup(addr);
+			if(bigEndian)
+				list.addFirst(val);
+			else
+				list.addLast(val);
 			addr += 1;
 		}
 		byte[] arr = new byte[size];
@@ -1113,100 +1127,149 @@ class AbstractMemory {
 	{
 		return LookupWholeQuantity(addr, gsa.sz*8);
 	}
+
+	// Load a multi-byte quantity, where the size is specified as a number of 
+	// bytes in a wrapper.
+	TVLBitVector LookupWholeQuantity(Varnode src)
+	{
+		return LookupWholeQuantity(src.getOffset(), src.getSize() * 8);
+	}
+	
+	void clear()
+	{
+		Contents.clear();
+	}
 };
 
-// The abstract interpreter is implemented as a derivative of the 
-// PcodeOpVisitor class, parameterized over TVLBitVector.
-class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
-	
-	// This, here, is a correctness bug, stemming from my lack of understanding
-	// of Varnodes when I first wrote it. This code treats Varnodes as variables,
-	// and maps variables to abstract values. However, Varnodes are not 
-	// *variables* -- the pcode does not contain variables. Why is that 
-	// important? Because, for example, on x86, subregisters of a register 
-	// quantity are considered simply as offsets within an idealized register
-	// space. To wit:
-	//
-	// EAX (register, 0x0, 4)	
-	// AX (register, 0x0, 2)
-	// AL (register, 0x0, 1)
-	// AH (register, 0x1, 1)
-	//
-	// If we write to EAX, we automatically update register[0], register[1],
-	// register[2], register[3], which updates the values of AX, AL, and AH.
-	// However, the current code treats the registers as being unrelated to one
-	// another, so the updates are not modeled. Obviously, that is incorrect.
-	// 
-	// Thus, in practice, we need to represent Varnode namespaces as memories. 
-	// I already have the abstract memory class above, so that shouldn't be a 
-	// huge issue ... but I'm still not sure whether Varnode spaces are 
-	// aliasable. For example, is it legal in Ghidra pcode to write to a Varnode
-	// space using a non-constant index? That could be really painful for certain
-	// analyses, if we didn't know which register or unique value was being used.
-	// Obviously that's necessary for legitimate random-access memory spaces, but
-	// I'm still not 100% sure if the Varnode spaces behave differently. Wouldn't
-	// make much of a difference for this analysis, but could really suck for 
-	// other ones.
-	//
-	// TL;DR: replace these with AbstractMemory classes.
-	HashMap<Varnode,TVLBitVector> RegisterValueMap;
-	HashMap<Varnode,TVLBitVector> UniqueValueMap;
-	AbstractMemory Memory;
-	
-	// For the sake of global analysis, we should also have a constructor that
-	// allows these components to be specified, rather than initialized to Top.
-	public TVLAbstractInterpreter()
+// This class holds an abstract machine state: 
+// * Register Varnodes
+// * Unique Varnodes
+// * A map from memory object id to its AbstractMemory object
+class TVLAbstractGhidraState {
+	AbstractMemory Registers;
+	AbstractMemory Uniques;
+	HashMap<Long, AbstractMemory> Memories;
+	boolean bigEndian;
+		
+	public TVLAbstractGhidraState(boolean isBigEndian)
 	{
-		RegisterValueMap = new HashMap<>();
-		UniqueValueMap   = new HashMap<>();
-		Memory           = new AbstractMemory();
+		Registers = new AbstractMemory(isBigEndian);
+		Uniques   = new AbstractMemory(isBigEndian);
+		Memories  = new HashMap<>();
+		bigEndian = isBigEndian;
 	}
-	
-	// Convert constant varnodes to three-valued bitvectors.
-	TVLBitVector visit_Constant(Instruction instr, PcodeOp pcode, Varnode Constant) 
+		
+	public void ClearUniques()
 	{
-		return new TVLBitVector(new GhidraSizeAdapter(Constant.getSize()), Constant.getOffset());
-	}
-
-	// Lookup register varnodes in the register value map. See big comment above.
-	TVLBitVector visit_Register(Instruction instr, PcodeOp pcode, Varnode Register) 
-	{
-		if(RegisterValueMap.containsKey(Register))
-			return RegisterValueMap.get(Register);
-		TVLBitVector bv = new TVLBitVector(new GhidraSizeAdapter(Register.getSize()));
-		RegisterValueMap.put(Register, bv);
-		return bv;
-	}
-
-	// Lookup unique varnodes in the unique value map. See big comment above.
-	TVLBitVector visit_Unique(Instruction instr, PcodeOp pcode, Varnode Unique) 
-	{
-		// This should probably happen 100% of the time...
-		if(UniqueValueMap.containsKey(Unique))
-			return UniqueValueMap.get(Unique);
-		// Should probably throw an exception here...
-		Printer.println("visit_Unique(): Unbound unique "+Unique.toString());
-		TVLBitVector bv = new TVLBitVector(new GhidraSizeAdapter(Unique.getSize()));
-		UniqueValueMap.put(Unique, bv);
-		return bv;
+		Uniques.clear();
 	}
 	
 	// Associate a varnode *as though it was a variable* with a three-valued
 	// bitvector. Again, as above, should be changed into memory writes.
-	void Associate(Varnode dest, TVLBitVector bv)
+	public void Associate(Varnode dest, TVLBitVector bv)
 	{
-		//Printer.println("Associate(): "+dest.toString()+" -> "+bv.toString());
+		// Printer.println("Associate(): "+dest.toString()+" -> "+bv.toString());
 		if(dest.isRegister())
-			RegisterValueMap.put(dest, bv);
+			Registers.StoreWholeQuantity(dest, bv);
 		else if(dest.isUnique())
-			UniqueValueMap.put(dest,bv);
+			Uniques.StoreWholeQuantity(dest,bv);
 		else
 		{
 			Printer.println("Associate(): Unknown destination "+dest.toString());
 			// Should throw an exception here...
 		}
 	}
+	public void Store(Varnode mem, long addr, TVLBitVector bv)
+	{
+		AbstractMemory am;
+		long memOffset = mem.getOffset();
+		if(Memories.containsKey(memOffset))
+			am = Memories.get(memOffset);
+		else
+		{
+			am = new AbstractMemory(bigEndian);
+			Memories.put(memOffset, am);
+		}
+		am.StoreWholeQuantity(addr, bv);
+	}
+	public TVLBitVector Lookup(Varnode what)
+	{
+		if(what.isRegister())
+			return Registers.LookupWholeQuantity(what);
+		if(what.isUnique())
+			return Uniques.LookupWholeQuantity(what);
+		// If this happens, read the documentation
+		// Should throw an exception here
+		Printer.println("Lookup(): Unknown source "+what.toString());
+		return new TVLBitVector(new GhidraSizeAdapter(what.getSize()));
+	}
+	
+	public TVLBitVector Load(Varnode mem, long addr, int size)
+	{
+		AbstractMemory am;
+		long memOffset = mem.getOffset();
+		if(!Memories.containsKey(memOffset))
+			return new TVLBitVector(size);
+		return Memories.get(memOffset).LookupWholeQuantity(addr, size);
+	}
+	
+	public void MakeMemoryTop(Varnode mem)
+	{
+		Memories.remove(mem);
+	}
+	
+	public TVLAbstractGhidraState clone()
+	{
+		TVLAbstractGhidraState r = new TVLAbstractGhidraState(bigEndian);
+		r.Registers = Registers.clone();
+		r.Uniques   = Uniques.clone();
+		HashMap<Long, AbstractMemory> newMemories  = new HashMap<>();
+		for(HashMap.Entry<Long,AbstractMemory> entry : Memories.entrySet())
+			newMemories.put(entry.getKey(), entry.getValue().clone());
+		r.Memories = newMemories;
+		return r;
+	}
+	
+}
 
+// The abstract interpreter is implemented as a derivative of the 
+// PcodeOpVisitor class, parameterized over TVLBitVector.
+class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
+	
+	public TVLAbstractGhidraState AbstractState;
+	
+	// For the sake of global analysis, we should also have a constructor that
+	// allows these components to be specified, rather than initialized to Top.
+	public TVLAbstractInterpreter(boolean isBigEndian)
+	{
+		AbstractState = new TVLAbstractGhidraState(isBigEndian);
+	}
+	
+	// For the sake of global analysis, we should also have a constructor that
+	// allows these components to be specified, rather than initialized to Top.
+	public TVLAbstractInterpreter(TVLAbstractGhidraState existing)
+	{
+		AbstractState = existing.clone();
+	}
+
+	// Convert constant varnodes to three-valued bitvectors.
+	TVLBitVector visit_Constant(Instruction instr, PcodeOp pcode, Varnode Constant) 
+	{
+		return new TVLBitVector(new GhidraSizeAdapter(Constant.getSize()), Constant.getOffset());
+	}
+
+	// Lookup register varnodes in the abstract state.
+	TVLBitVector visit_Register(Instruction instr, PcodeOp pcode, Varnode Register) 
+	{
+		return AbstractState.Lookup(Register);
+	}
+
+	// Lookup unique varnodes in the abstract state.
+	TVLBitVector visit_Unique(Instruction instr, PcodeOp pcode, Varnode Unique) 
+	{
+		return AbstractState.Lookup(Unique);
+	}
+	
 	//
 	// Below here are the abstract interpretations of the pcode operations.
 	//
@@ -1239,7 +1302,7 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	// * PcodeOp.CBRANCH
 	// * PcodeOp.RETURN
 
-	// I probably just want to associate Top with the destination for these, 
+	// I probably just want to AbstractState.Associate Top with the destination for these, 
 	// unless the values are constant, in which case I can use the raw constant
 	// value. Same goes for all of the FLOAT_ operations. In fact, the same could
 	// go for all operations, period -- use concrete operations if the values are
@@ -1261,24 +1324,27 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	void visit_LOAD(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{ 
 		TVLBitVector addr = visit_Varnode(instr,pcode,pcode.getInput(1));
+		Varnode memory = pcode.getInput(0);
 		Varnode output = pcode.getOutput();
 		Pair<Integer,Long> p = addr.GetConstantValue();
+		
 		TVLBitVector result;
 		if(p == null)
 			result = new TVLBitVector(new GhidraSizeAdapter(output.getSize()));
 		else
-			result = Memory.LookupWholeQuantity(p.y, new GhidraSizeAdapter(output.getSize()));
-		Associate(output, result);
+			result = AbstractState.Load(memory, p.y, p.x);
+		AbstractState.Associate(output, result);
 	}; 
 	void visit_STORE(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
+		Varnode memory = pcode.getInput(0);
 		TVLBitVector addr = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector what = visit_Varnode(instr,pcode,pcode.getInput(2));
 		Pair<Integer,Long> p = addr.GetConstantValue();
 		if(p != null)
-			Memory = Memory.StoreWholeQuantity(p.y, what);
+			AbstractState.Store(memory, p.y, what);
 		else
-			Memory = Memory.Top();
+			AbstractState.MakeMemoryTop(memory);
 	}; 
 	
 	// And the remainder have been implemented, albeit not rigorously tested.
@@ -1287,164 +1353,164 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.CreateSingle(TVLBitVectorUtil.AndTable[lhs.Value()[0]][rhs.Value()[0]]);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}
 	void visit_BOOL_NEGATE(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector result = TVLBitVectorUtil.CreateSingle(TVLBitVectorUtil.NotTable[lhs.Value()[0]]);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_BOOL_OR(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.CreateSingle(TVLBitVectorUtil.OrTable[lhs.Value()[0]][rhs.Value()[0]]);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_BOOL_XOR(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.CreateSingle(TVLBitVectorUtil.XorTable[lhs.Value()[0]][rhs.Value()[0]]);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_COPY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
-		Associate(pcode.getOutput(), lhs);		
+		AbstractState.Associate(pcode.getOutput(), lhs);		
 	}; 
 
 	void visit_INT_2COMP(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{ 
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector result = TVLBitVectorUtil.Neg(lhs);
-		Associate(pcode.getOutput(), result);		
+		AbstractState.Associate(pcode.getOutput(), result);		
 	}; 
 	void visit_INT_ADD(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.Add(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_AND(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.And(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_EQUAL(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.Equals(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_LEFT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.ShiftLeftBv(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_LESS(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.ULT(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_LESSEQUAL(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.ULE(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_MULT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.Multiply(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_NEGATE(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector result = TVLBitVectorUtil.Not(lhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_NOTEQUAL(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.NotEquals(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_OR(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.Or(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_RIGHT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.ShiftRightBv(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_SEXT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		Varnode output = pcode.getOutput();
 		TVLBitVector result = TVLBitVectorUtil.SignExtend(lhs, new GhidraSizeAdapter(output.getSize()));
-		Associate(output, result);
+		AbstractState.Associate(output, result);
 	}; 
 	void visit_INT_SLESS(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.SLT(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_SLESSEQUAL(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.SLE(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_SRIGHT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{ 
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.ShiftRightArithmeticBv(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_SUB(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.Subtract(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_XOR(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.Xor(lhs,rhs);
-		Associate(pcode.getOutput(), result);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_ZEXT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		Varnode output = pcode.getOutput();
 		TVLBitVector result = TVLBitVectorUtil.ZeroExtend(lhs, new GhidraSizeAdapter(output.getSize()));
-		Associate(output, result);
+		AbstractState.Associate(output, result);
 	}; 
 }
 
@@ -1452,9 +1518,9 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 // the analysis.
 public class ThreeValuedAbstractInterpreter extends GhidraScript {
 
-	void AbstractInterpret(InstructionIterator instructions, boolean setTF, int TFvalue, boolean debug) throws Exception
+	void AbstractInterpret(boolean isBigEndian, InstructionIterator instructions, boolean setTF, int TFvalue, boolean debug) throws Exception
 	{
-		TVLAbstractInterpreter visitor = new TVLAbstractInterpreter();
+		TVLAbstractInterpreter visitor = new TVLAbstractInterpreter(isBigEndian);
 		Language l = currentProgram.getLanguage();
 		VarnodeTranslator vt = new VarnodeTranslator​(currentProgram);
 		
@@ -1467,13 +1533,13 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		Varnode vAL  = vt.getVarnode(rAL);
 		
 		// Initialize ESP (otherwise we can't track memory)
-		visitor.RegisterValueMap.put(vESP, new TVLBitVector(32, 0x1000));
+		visitor.AbstractState.Associate(vESP, new TVLBitVector(32, 0x1000));
 
 		// If the caller wanted to pre-initialize TF, do that
 		if(setTF)
 		{
 			println("Analyzing under the assumption that TF = "+TFvalue);
-			visitor.RegisterValueMap.put(vTF, new TVLBitVector(8, TFvalue));
+			visitor.AbstractState.Associate(vTF, new TVLBitVector(8, TFvalue));
 		}
 		else
 			println("Analyzing without setting TF");
@@ -1491,16 +1557,16 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 					// Print out the pcode details if requested
 					if(debug) {
 						println(pcode[i].toString());
-						Varnode	output = pcode[i].getOutput();
-						if(output != null)
-							println("\t" + output.toString());
-						Varnode[]	inputs = pcode[i].getInputs();
-						for (int j = 0; j < inputs.length; ++j)
-						{
-							println("\t"+j+" "+inputs[j].toString());
-							if(inputs[j].isConstant())
-								println("\t\tConstant value?"+inputs[j].getOffset());
-						}
+						//Varnode	output = pcode[i].getOutput();
+						//if(output != null)
+						//	println("\t" + output.toString());
+						//Varnode[]	inputs = pcode[i].getInputs();
+						//for (int j = 0; j < inputs.length; ++j)
+						//{
+						//	println("\t"+j+" "+inputs[j].toString());
+						//	if(inputs[j].isConstant())
+						//		println("\t\tConstant value?"+inputs[j].getOffset());
+						//}
 					}
 					
 					// Finally, abstractly interpret the pcode instruction
@@ -1513,11 +1579,11 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 				// documentation settles this question one way or the other, just that
 				// I haven't read enough documentation / don't know the system well 
 				// enough to really make a conclusive statement on the subject...
-				visitor.UniqueValueMap.clear();
+				visitor.AbstractState.ClearUniques();
 			}
 			
 			// After all instructions have been interpreted, print the value of AL.
-			println("Final value of AL: "+visitor.RegisterValueMap.get(vAL));
+			println("Final value of AL: "+visitor.AbstractState.Lookup(vAL));
 		}
 		
 		// If we encountered a pcode/Varnode type that wasn't handled, be noisy.
@@ -1545,14 +1611,17 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 			set = currentProgram.getMemory().getExecuteSet();
 		}
 		
+		boolean isBigEndian = currentProgram.getLanguage().isBigEndian();
+		boolean debug = false;
+		
 		// Abstract interpret under the assumption that TF = 0.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, false);
+		AbstractInterpret(isBigEndian, currentProgram.getListing().getInstructions(set, true), true,  0, debug);
 
 		// Abstract interpret under the assumption that TF = 1.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, false);
+		AbstractInterpret(isBigEndian, currentProgram.getListing().getInstructions(set, true), true,  1, debug);
 
 		// Abstract interpret under the assumption that TF has not been set.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, false);
+		AbstractInterpret(isBigEndian, currentProgram.getListing().getInstructions(set, true), false, 0, debug);
 	}
 }
 
