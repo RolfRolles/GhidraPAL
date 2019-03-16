@@ -12,7 +12,6 @@
 // * Perhaps change the visitor to an interface (medium)
 // * Encapsulate analysis-level variation in handling of branches (medium)
 // * Performance/algorithmic optimizations (medium)
-// * Make unsupported operations return top (minor)
 // * Add tests (minor consequences, unless major errors revealed)
 import java.util.Arrays;
 import java.util.HashMap;
@@ -30,6 +29,25 @@ import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.pcode.VarnodeTranslator;
 import ghidra.app.services.ConsoleService;
 import ghidra.framework.plugintool.PluginTool;
+
+// The following are used for the emulator-based testing
+import ghidra.app.plugin.processors.sleigh.SleighLanguage;
+import ghidra.pcode.emulate.Emulate;
+import ghidra.pcode.emulate.BreakTableCallBack;
+import ghidra.pcode.memstate.MemoryState;
+import ghidra.pcode.memstate.MemoryBank;
+import ghidra.pcode.memstate.MemoryPageBank;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSpace;
+import ghidra.program.model.mem.MemoryBlock;
+//import ghidra.program.model.lang.Language;
+//import ghidra.program.model.lang.Register;
+//import ghidra.program.model.listing.Program;
+//import ghidra.program.model.pcode.VarnodeTranslator;
+//import ghidra.program.model.pcode.PcodeOp;
+//import ghidra.program.model.pcode.Varnode;
+
+
 
 // This is here so that classes outside of the GhidraScript-derivative can 
 // print to the console. Those classes inherit the println() method, but 
@@ -1066,7 +1084,6 @@ class AbstractMemory {
 
 	// Store a multi-byte quantity into memory and return a new one. Could 
 	// improve by only duplicating once, or by using an applicative dictionary.
-	// Currently assumes little-endianness.
 	void StoreWholeQuantity(long addr, TVLBitVector bv)
 	{
 		byte[] bvArr = bv.Value();
@@ -1099,8 +1116,7 @@ class AbstractMemory {
 		return bv;
 	}
 
-	// Load a multi-byte quantity, where the size is specified in bits. Currently
-	// assumes little-endianness.
+	// Load a multi-byte quantity, where the size is specified in bits. 
 	TVLBitVector LookupWholeQuantity(long addr, int size)
 	{
 		// Perform each of the lookups.
@@ -1692,9 +1708,191 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 
 }
 
+// This class applies the emulator to x86 instructions. Given client-specified
+// input Varnode locations (e.g., register operands), and a client-specified 
+// output Varnode location, set the input values, emulate an x86 instruction 
+// at a specified address, and retrieve an output value.
+//
+// What I really wanted when I sat down today to work on the testing portion 
+// was an emulator for PcodeOp objects. This is not exactly that. However, 
+// presumably the Ghidra Emulate class operates upon the PcodeOp objects 
+// associated with the given assembly instructions. So in a roundabout way, we
+// can test PcodeOp operations this way.
+//
+// And note that, as always, I have no idea what I am doing here. I don't have
+// a plan. None of the Ghidra example scripts used the Emulator class, so I 
+// dug the details out of the documentation. Ghidra may in fact already contain
+// the functionality I desire, but if it does, I'm not aware of it at the time
+// of writing. I hope to discover that functionality in the future and use it
+// to simplify this code.
+class EmulatorTester {
+	
+	Register rAL, rAX, rEAX;
+	Register rBL, rBX, rEBX;
+	Register rCL, rCX, rECX;
+	Varnode vAL, vAX, vEAX;
+	Varnode vBL, vBX, vEBX;
+	Varnode vCL, vCX, vECX;
+	
+	Address minAddress;
+	AddressSpace defaultSpace;
+	AddressSpace registerSpace;
+	AddressSpace uniqueSpace;
+	MemoryBank defaultMemoryBank;
+	MemoryBank registerMemoryBank;
+	MemoryBank uniqueMemoryBank;
+	MemoryState ms;
+	BreakTableCallBack bt;
+	Emulate emulator;
+
+	public EmulatorTester(Program currentProgram)
+	{
+		SleighLanguage l = (SleighLanguage)currentProgram.getLanguage();
+		VarnodeTranslator vt = new VarnodeTranslator​(currentProgram);
+		minAddress = currentProgram.getMinAddress();
+		
+		// Initialize Register and corresponding Varnode objects
+		rAL  = l.getRegister("AL");  vAL  = vt.getVarnode(rAL);
+		rBL  = l.getRegister("BL");  vBL  = vt.getVarnode(rBL);
+		rCL  = l.getRegister("CL");  vCL  = vt.getVarnode(rCL);
+		rAX  = l.getRegister("AX");  vAX  = vt.getVarnode(rAX);
+		rBX  = l.getRegister("BX");  vBX  = vt.getVarnode(rBX);
+		rCX  = l.getRegister("CX");  vCX  = vt.getVarnode(rCX);
+		rEAX = l.getRegister("EAX"); vEAX = vt.getVarnode(rEAX);
+		rEBX = l.getRegister("EBX"); vEBX = vt.getVarnode(rEBX);
+		rECX = l.getRegister("ECX"); vECX = vt.getVarnode(rECX);
+		
+		// Initialize AddressSpace objects
+		defaultSpace  = currentProgram.getAddressFactory().getDefaultAddressSpace();
+		registerSpace = currentProgram.getAddressFactory().getRegisterSpace();
+		uniqueSpace   = currentProgram.getAddressFactory().getUniqueSpace();
+		
+		// Create MemoryPageBank objects for the address spaces
+		defaultMemoryBank  = new MemoryPageBank(defaultSpace,  false, 4096, null);
+		registerMemoryBank = new MemoryPageBank(registerSpace, false, 4096, null);
+		uniqueMemoryBank   = new MemoryPageBank(uniqueSpace,   false, 4096, null);
+		
+		// Create and initialize the MemoryState
+		ms = new MemoryState(l);
+		ms.setMemoryBank(registerMemoryBank);
+		ms.setMemoryBank(defaultMemoryBank);
+
+		// Initialize the BreakTable
+		bt = new BreakTableCallBack(l);
+		
+		// Create the emulator object
+		emulator = new Emulate(l, ms, bt);
+	}
+	
+	// Copy the bytes corresponding to the machine code used for tests.
+	void InitializeCodeSection(byte[] codeBytes)
+	{
+		// Initialize the default memory with the test program bytes
+		defaultMemoryBank.setInitialized(0, 4096, true);
+		defaultMemoryBank.setChunk(0, codeBytes.length, codeBytes);		
+	}
+	
+	// Generic method for testing an assembly language instruction with two 
+	// Register inputs, returning the contents of a designated Register output.
+	long TestInsnIn2Out(long insnOffset, Register rin1, long valRin1, Register rin2, long valRin2, Register rout)
+	{
+		ms.setValue(rin1, valRin1);
+		ms.setValue(rin2, valRin2);
+		emulator.setExecuteAddress(minAddress.add(insnOffset));
+		emulator.executeInstruction(false);
+		return ms.getValue(rout);
+	}
+	
+	// Generic method for testing an assembly language instruction with two 
+	// Varnode inputs, returning the contents of a designated Varnode output.
+	long TestInsnIn2Out(long insnOffset, Varnode vin1, long valVin1, Varnode vin2, long valVin2, Varnode vout)
+	{
+		ms.setValue(vin1, valVin1);
+		ms.setValue(vin2, valVin2);
+		emulator.setExecuteAddress(minAddress.add(insnOffset));
+		emulator.executeInstruction(false);
+		return ms.getValue(vout);
+	}
+
+	// Generic method for testing an assembly language instruction with one
+	// Register input, returning the contents of a designated Register output.
+	long TestInsnIn1Out(long insnOffset, Register rin1, long valRin1, Register rout)
+	{
+		ms.setValue(rin1, valRin1);
+		emulator.setExecuteAddress(minAddress.add(insnOffset));
+		emulator.executeInstruction(false);
+		return ms.getValue(rout);
+	}
+	
+	// Generic method for testing an assembly language instruction with one
+	// Varnode inputs, returning the contents of a designated Varnode output.
+	long TestInsnIn1Out(long insnOffset, Varnode vin1, long valVin1, Varnode vout)
+	{
+		ms.setValue(vin1, valVin1);
+		emulator.setExecuteAddress(minAddress.add(insnOffset));
+		emulator.executeInstruction(false);
+		return ms.getValue(vout);
+	}
+
+	// Convenience method for instructions like "op AL, BL"
+	long TestGenericBinop8(long insnOffset, long valAlBefore, long valBlBefore)
+	{
+		return TestInsnIn2Out(insnOffset, rAL, valAlBefore, rBL, valBlBefore, rAL);
+	}
+
+	// Convenience method for instructions like "op AL"
+	long TestGenericUnop8(long insnOffset, long valAlBefore)
+	{
+		return TestInsnIn1Out(insnOffset, rAL, valAlBefore, rAL);
+	}
+
+	// Convenience method for instructions like "op AX, BX"
+	long TestGenericBinop16(long insnOffset, long valAxBefore, long valBxBefore)
+	{
+		return TestInsnIn2Out(insnOffset, rAX, valAxBefore, rBX, valBxBefore, rAX);
+	}
+
+	// Convenience method for instructions like "op AX"
+	long TestGenericUnop16(long insnOffset, long valAxBefore)
+	{
+		return TestInsnIn1Out(insnOffset, rAX, valAxBefore, rAX);
+	}
+
+	// Convenience method for instructions like "op EAX, EBX"
+	long TestGenericBinop32(long insnOffset, long valEaxBefore, long valEbxBefore)
+	{
+		return TestInsnIn2Out(insnOffset, rEAX, valEaxBefore, rEBX, valEbxBefore, rEAX);
+	}
+
+	// Convenience method for instructions like "op EAX"
+	long TestGenericUnop32(long insnOffset, long valEaxBefore)
+	{
+		return TestInsnIn1Out(insnOffset, rEAX, valEaxBefore, rEAX);
+	}
+}
+
 // Finally, the top-level script functionality. For now, it's just a demo of 
 // the analysis.
 public class ThreeValuedAbstractInterpreter extends GhidraScript {
+
+	public void TestAbstractTransformersAgainstEmulator() throws Exception {
+		EmulatorTester et = new EmulatorTester(currentProgram);
+		
+		// Copy the x86 machine code bytes for testing purposes into the emulator
+		Address minAddress = currentProgram.getMinAddress();
+		MemoryBlock testCodeBytesBlock = getMemoryBlock(minAddress);
+		byte[] testCodeBytes = new byte[(int)testCodeBytesBlock.getSize()];
+		testCodeBytesBlock.getBytes(minAddress, testCodeBytes);
+		et.InitializeCodeSection(testCodeBytes);
+
+		// Do a test. This is assuming that "X86Instructions.bin" is loaded as the
+		// underlying program in the Ghidra database.
+		long testOffset_ADD_AL_BL = 0;
+		long alValue = 0x12;
+		long blValue = 0x34;
+		long retVal = et.TestGenericBinop8(testOffset_ADD_AL_BL, alValue, blValue);
+		printf("add al, bl [al=%02x, bl=%02x] => %02x\n", alValue, blValue, retVal);
+	}
 
 	void AbstractInterpret(InstructionIterator instructions, boolean setTF, int TFvalue, boolean debug) throws Exception
 	{
@@ -1801,4 +1999,3 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
 	}
 }
-
