@@ -9,10 +9,10 @@
 // at the moment. The comments throughout indicate some potential future 
 // modifications:
 // * Perhaps an analysis-level change (relatively major code consequences)
-// * Perhaps change the visitor to an interface (medium)
-// * Encapsulate analysis-level variation in handling of branches (medium)
 // * Performance/algorithmic optimizations (medium)
-// * Add tests (minor consequences, unless major errors revealed)
+// * Perhaps change the visitor to an interface (medium)
+// * Encapsulate analysis-level variation in handling of branches (minor)
+// * Add tests for approximated behavior (minor)
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.function.UnaryOperator; 
@@ -1028,9 +1028,7 @@ final class TVLBitVectorUtil {
 
 // The trivial memory model. Writes to locations that are not fully constant
 // result in an all-top memory (though the creation of the all-top memory takes
-// place outside of this class). This class follows the pure-functional 
-// paradigm where each store creates a new memory. That's necessary, although
-// could be algorithmically improved by eliminating intermediate copies.
+// place outside of this class).
 class AbstractMemory {
 	
 	// Memory is just a hash map from addresses to 8-bit bitvectors.
@@ -1061,10 +1059,6 @@ class AbstractMemory {
 	void Store(long addr, TVLBitVector bv)
 	{
 		Contents.put(addr,bv);
-		//HashMap<Long,TVLBitVector> newContents = (HashMap)Contents.clone();
-		//AbstractMemory newMemory = new AbstractMemory();
-		//newMemory.Contents = newContents;
-		//return newMemory;
 	}
 	
 	// Return a new memory, entirely unknown.
@@ -1777,6 +1771,45 @@ class TransformerTester {
 		TVLBitVector bvres = tvlai.AbstractState.Lookup(out);
 		return new Pair(result,bvres);
 	}
+
+	long GetUnaryPcodeResult(PcodeOp pcode, long valLhs)
+	{
+		PcodeOpRaw raw = new PcodeOpRaw(pcode);
+		OpBehavior behave = raw.getBehavior();
+		assert(behave != null);
+		assert(behave instanceof UnaryOpBehavior);
+		UnaryOpBehavior unaryBehave = (UnaryOpBehavior) behave;
+		Varnode lhs = pcode.getInput(0);
+		Varnode out = pcode.getOutput();
+		return unaryBehave.evaluateUnary(out.getSize(), lhs.getSize(), valLhs);
+	}
+
+	Pair<Long,TVLBitVector> TestUnaryPcode(int op, int nBytes, long valLhs)
+	{
+		Varnode lhs, out;
+		switch(nBytes)
+		{
+			case 1: lhs = vAL;  out = vCL;  break;
+			case 2: lhs = vAX;  out = vCX;  break;
+			case 4: lhs = vEAX; out = vECX; break;
+			default: assert(false); return null;
+		}
+		Varnode inputs[] = new Varnode[] { lhs };
+		PcodeOp p = new PcodeOp​(TestAddress, seqNo++, op, inputs, out);
+		long result = GetUnaryPcodeResult(p, valLhs);
+		tvlai.AbstractState.clear();
+		tvlai.AbstractState.Associate(lhs, new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs));
+		try {
+			tvlai.visit(null, p);
+		}
+		catch(VisitorUnimplementedException e)
+		{
+			Printer.println("Caught visitor unimplemented exception: "+e);
+			return null;
+		}
+		TVLBitVector bvres = tvlai.AbstractState.Lookup(out);
+		return new Pair(result,bvres);
+	}
 };
 
 // Finally, the top-level script functionality. For now, it's just a demo of 
@@ -1785,7 +1818,71 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 
 	public void TestAbstractTransformers() throws Exception {
 		TransformerTester tt = new TransformerTester(currentProgram);
-		tt.TestBinaryPcode(PcodeOp.INT_ADD, 1, 0x12, 0x34);
+		int binaryOperators[] = new int[] {
+			PcodeOp.INT_ADD,
+			PcodeOp.INT_AND,
+			PcodeOp.INT_EQUAL,
+			PcodeOp.INT_LEFT,
+			PcodeOp.INT_LESS,
+			PcodeOp.INT_LESSEQUAL,
+			PcodeOp.INT_MULT,
+			PcodeOp.INT_NOTEQUAL,
+			PcodeOp.INT_OR,
+			PcodeOp.INT_RIGHT,
+			PcodeOp.INT_SLESS,
+			PcodeOp.INT_SLESSEQUAL,
+			PcodeOp.INT_SRIGHT,
+			PcodeOp.INT_SUB,
+			PcodeOp.INT_XOR
+		};
+		int unaryOperators[] = new int[] {
+			PcodeOp.COPY,
+			PcodeOp.INT_2COMP,
+			PcodeOp.INT_NEGATE,
+			PcodeOp.INT_SEXT,
+			PcodeOp.INT_ZEXT
+		};
+
+		for(long alValue = 0; alValue < 0x100; alValue++)
+		{
+			for(long blValue = 0; blValue < 0x100; blValue++)
+			{
+				for(int i = 0; i < binaryOperators.length; i++)
+				{
+					int op = binaryOperators[i];
+					Pair<Long, TVLBitVector> res = tt.TestBinaryPcode(op, 1, alValue, blValue);
+					Pair<Integer,Long> cval = res.y.GetConstantValue();
+					if(cval == null)
+					{
+						Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract result non-constant "+res.y.toString());
+					}
+					// What the hell is this? Java was returning true for "cval.y!=res.x"
+					// when the values were identical. StackExchange suggested it was an
+					// int/long issue. I don't like that very much.
+					else if(!(new Long(cval.y).equals(new Long(res.x))))
+					{
+						Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" constant abstract result differs "+cval.y);						
+					}
+				}
+			}
+			for(int i = 0; i < unaryOperators.length; i++)
+			{
+				int op = unaryOperators[i];
+				Pair<Long, TVLBitVector> res = tt.TestUnaryPcode(op, 1, alValue);
+				Pair<Integer,Long> cval = res.y.GetConstantValue();
+				if(cval == null)
+				{
+					Printer.println("Op "+op+", al = "+alValue+" result "+res.x+" abstract result non-constant "+res.y.toString());
+				}
+				// I just know this is going to bite me millions of times in the 
+				// future. Thanks, Obama.
+				else if(!(new Long(cval.y).equals(new Long(res.x))))
+				{
+					Printer.println("Op "+op+", al = "+alValue+" result "+res.x+" constant abstract result differs "+cval.y);						
+				}
+			}			
+		}
+		Printer.println("Testing operators done");
 	}
 
 	void AbstractInterpret(InstructionIterator instructions, boolean setTF, int TFvalue, boolean debug) throws Exception
@@ -1883,15 +1980,15 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		
 		boolean debug = false;
 		
-		TestAbstractTransformers();
+		// TestAbstractTransformers();
 		
 		// Abstract interpret under the assumption that TF = 0.
-		// AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
+		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
 
 		// Abstract interpret under the assumption that TF = 1.
-		// AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, debug);
+		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, debug);
 
 		// Abstract interpret under the assumption that TF has not been set.
-		// AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
+		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
 	}
 }
