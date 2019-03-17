@@ -30,24 +30,15 @@ import ghidra.program.model.pcode.VarnodeTranslator;
 import ghidra.app.services.ConsoleService;
 import ghidra.framework.plugintool.PluginTool;
 
-// The following are used for the emulator-based testing
+// The following are used for testing
+import ghidra.pcode.pcoderaw.PcodeOpRaw;
 import ghidra.app.plugin.processors.sleigh.SleighLanguage;
-import ghidra.pcode.emulate.Emulate;
-import ghidra.pcode.emulate.BreakTableCallBack;
-import ghidra.pcode.memstate.MemoryState;
-import ghidra.pcode.memstate.MemoryBank;
-import ghidra.pcode.memstate.MemoryPageBank;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSpace;
-import ghidra.program.model.mem.MemoryBlock;
-//import ghidra.program.model.lang.Language;
-//import ghidra.program.model.lang.Register;
-//import ghidra.program.model.listing.Program;
-//import ghidra.program.model.pcode.VarnodeTranslator;
-//import ghidra.program.model.pcode.PcodeOp;
-//import ghidra.program.model.pcode.Varnode;
-
-
+import ghidra.program.model.address.GenericAddressSpace;
+import ghidra.pcode.opbehavior.OpBehavior;
+import ghidra.pcode.opbehavior.BinaryOpBehavior;
+import ghidra.pcode.opbehavior.UnaryOpBehavior;
 
 // This is here so that classes outside of the GhidraScript-derivative can 
 // print to the console. Those classes inherit the println() method, but 
@@ -64,12 +55,12 @@ final class Printer {
 // Does Java really not ship with generic pairs or tuples? That seems like an
 // oversight on their behalf.
 class Pair<X, Y> { 
-  public final X x; 
-  public final Y y; 
-  public Pair(X x, Y y) { 
-    this.x = x; 
-    this.y = y; 
-  } 
+	public final X x; 
+	public final Y y; 
+	public Pair(X x, Y y) { 
+		this.x = x; 
+		this.y = y; 
+	} 
 } 
 
 // Below we define a generic visitor class that can be used to visit pcode 
@@ -1182,6 +1173,13 @@ class TVLAbstractGhidraState {
 		bigEndian = isBigEndian;
 	}
 		
+	public void clear()
+	{
+		Registers.clear();
+		Uniques.clear();
+		Memories.clear();
+	}
+	
 	public void ClearUniques()
 	{
 		Uniques.clear();
@@ -1191,7 +1189,7 @@ class TVLAbstractGhidraState {
 	// bitvector. Again, as above, should be changed into memory writes.
 	public void Associate(Varnode dest, TVLBitVector bv)
 	{
-		// Printer.println("Associate(): "+dest.toString()+" -> "+bv.toString());
+		//Printer.println("Associate(): "+dest.toString()+" -> "+bv.toString());
 		if(dest.isRegister())
 			Registers.StoreWholeQuantity(dest, bv);
 		else if(dest.isUnique())
@@ -1704,52 +1702,28 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	{
 		SetOutputToTop(pcode.getOutput());
 	}; 
-
-
 }
 
-// This class applies the emulator to x86 instructions. Given client-specified
-// input Varnode locations (e.g., register operands), and a client-specified 
-// output Varnode location, set the input values, emulate an x86 instruction 
-// at a specified address, and retrieve an output value.
-//
-// What I really wanted when I sat down today to work on the testing portion 
-// was an emulator for PcodeOp objects. This is not exactly that. However, 
-// presumably the Ghidra Emulate class operates upon the PcodeOp objects 
-// associated with the given assembly instructions. So in a roundabout way, we
-// can test PcodeOp operations this way.
-//
-// And note that, as always, I have no idea what I am doing here. I don't have
-// a plan. None of the Ghidra example scripts used the Emulator class, so I 
-// dug the details out of the documentation. Ghidra may in fact already contain
-// the functionality I desire, but if it does, I'm not aware of it at the time
-// of writing. I hope to discover that functionality in the future and use it
-// to simplify this code.
-class EmulatorTester {
-	
+class TransformerTester {
 	Register rAL, rAX, rEAX;
 	Register rBL, rBX, rEBX;
 	Register rCL, rCX, rECX;
 	Varnode vAL, vAX, vEAX;
 	Varnode vBL, vBX, vEBX;
 	Varnode vCL, vCX, vECX;
+	TVLAbstractInterpreter tvlai;
+	AddressSpace TestAddressSpace;
+	Address TestAddress;
+	int seqNo;
 	
-	Address minAddress;
-	AddressSpace defaultSpace;
-	AddressSpace registerSpace;
-	AddressSpace uniqueSpace;
-	MemoryBank defaultMemoryBank;
-	MemoryBank registerMemoryBank;
-	MemoryBank uniqueMemoryBank;
-	MemoryState ms;
-	BreakTableCallBack bt;
-	Emulate emulator;
-
-	public EmulatorTester(Program currentProgram)
+	public TransformerTester(Program currentProgram)
 	{
 		SleighLanguage l = (SleighLanguage)currentProgram.getLanguage();
 		VarnodeTranslator vt = new VarnodeTranslator​(currentProgram);
-		minAddress = currentProgram.getMinAddress();
+		tvlai = new TVLAbstractInterpreter(l.isBigEndian());
+		TestAddressSpace = new GenericAddressSpace("TEST", 32, AddressSpace.TYPE_OTHER, 0);
+		TestAddress = TestAddressSpace.getAddress(0);
+		seqNo = 1;
 		
 		// Initialize Register and corresponding Varnode objects
 		rAL  = l.getRegister("AL");  vAL  = vt.getVarnode(rAL);
@@ -1760,138 +1734,58 @@ class EmulatorTester {
 		rCX  = l.getRegister("CX");  vCX  = vt.getVarnode(rCX);
 		rEAX = l.getRegister("EAX"); vEAX = vt.getVarnode(rEAX);
 		rEBX = l.getRegister("EBX"); vEBX = vt.getVarnode(rEBX);
-		rECX = l.getRegister("ECX"); vECX = vt.getVarnode(rECX);
-		
-		// Initialize AddressSpace objects
-		defaultSpace  = currentProgram.getAddressFactory().getDefaultAddressSpace();
-		registerSpace = currentProgram.getAddressFactory().getRegisterSpace();
-		uniqueSpace   = currentProgram.getAddressFactory().getUniqueSpace();
-		
-		// Create MemoryPageBank objects for the address spaces
-		defaultMemoryBank  = new MemoryPageBank(defaultSpace,  false, 4096, null);
-		registerMemoryBank = new MemoryPageBank(registerSpace, false, 4096, null);
-		uniqueMemoryBank   = new MemoryPageBank(uniqueSpace,   false, 4096, null);
-		
-		// Create and initialize the MemoryState
-		ms = new MemoryState(l);
-		ms.setMemoryBank(registerMemoryBank);
-		ms.setMemoryBank(defaultMemoryBank);
-
-		// Initialize the BreakTable
-		bt = new BreakTableCallBack(l);
-		
-		// Create the emulator object
-		emulator = new Emulate(l, ms, bt);
+		rECX = l.getRegister("ECX"); vECX = vt.getVarnode(rECX);		
 	}
 	
-	// Copy the bytes corresponding to the machine code used for tests.
-	void InitializeCodeSection(byte[] codeBytes)
+	long GetBinaryPcodeResult(PcodeOp pcode, long valLhs, long valRhs)
 	{
-		// Initialize the default memory with the test program bytes
-		defaultMemoryBank.setInitialized(0, 4096, true);
-		defaultMemoryBank.setChunk(0, codeBytes.length, codeBytes);		
+		PcodeOpRaw raw = new PcodeOpRaw(pcode);
+		OpBehavior behave = raw.getBehavior();
+		assert(behave != null);
+		assert(behave instanceof BinaryOpBehavior);
+		BinaryOpBehavior binaryBehave = (BinaryOpBehavior) behave;
+		Varnode lhs = pcode.getInput(0);
+		Varnode rhs = pcode.getInput(1);
+		Varnode out = pcode.getOutput();
+		return binaryBehave.evaluateBinary(out.getSize(), lhs.getSize(), valLhs, valRhs);
 	}
 	
-	// Generic method for testing an assembly language instruction with two 
-	// Register inputs, returning the contents of a designated Register output.
-	long TestInsnIn2Out(long insnOffset, Register rin1, long valRin1, Register rin2, long valRin2, Register rout)
+	Pair<Long,TVLBitVector> TestBinaryPcode(int op, int nBytes, long valLhs, long valRhs)
 	{
-		ms.setValue(rin1, valRin1);
-		ms.setValue(rin2, valRin2);
-		emulator.setExecuteAddress(minAddress.add(insnOffset));
-		emulator.executeInstruction(false);
-		return ms.getValue(rout);
+		Varnode lhs, rhs, out;
+		switch(nBytes)
+		{
+			case 1: lhs = vAL;  rhs = vBL;  out = vCL;  break;
+			case 2: lhs = vAX;  rhs = vBX;  out = vCX;  break;
+			case 4: lhs = vEAX; rhs = vEBX; out = vECX; break;
+			default: assert(false); return null;
+		}
+		Varnode inputs[] = new Varnode[] { lhs, rhs };
+		PcodeOp p = new PcodeOp​(TestAddress, seqNo++, op, inputs, out);
+		long result = GetBinaryPcodeResult(p, valLhs, valRhs);
+		tvlai.AbstractState.clear();
+		tvlai.AbstractState.Associate(lhs, new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs));
+		tvlai.AbstractState.Associate(rhs, new TVLBitVector(new GhidraSizeAdapter(nBytes), valRhs));
+		try {
+			tvlai.visit(null, p);
+		}
+		catch(VisitorUnimplementedException e)
+		{
+			Printer.println("Caught visitor unimplemented exception: "+e);
+			return null;
+		}
+		TVLBitVector bvres = tvlai.AbstractState.Lookup(out);
+		return new Pair(result,bvres);
 	}
-	
-	// Generic method for testing an assembly language instruction with two 
-	// Varnode inputs, returning the contents of a designated Varnode output.
-	long TestInsnIn2Out(long insnOffset, Varnode vin1, long valVin1, Varnode vin2, long valVin2, Varnode vout)
-	{
-		ms.setValue(vin1, valVin1);
-		ms.setValue(vin2, valVin2);
-		emulator.setExecuteAddress(minAddress.add(insnOffset));
-		emulator.executeInstruction(false);
-		return ms.getValue(vout);
-	}
-
-	// Generic method for testing an assembly language instruction with one
-	// Register input, returning the contents of a designated Register output.
-	long TestInsnIn1Out(long insnOffset, Register rin1, long valRin1, Register rout)
-	{
-		ms.setValue(rin1, valRin1);
-		emulator.setExecuteAddress(minAddress.add(insnOffset));
-		emulator.executeInstruction(false);
-		return ms.getValue(rout);
-	}
-	
-	// Generic method for testing an assembly language instruction with one
-	// Varnode inputs, returning the contents of a designated Varnode output.
-	long TestInsnIn1Out(long insnOffset, Varnode vin1, long valVin1, Varnode vout)
-	{
-		ms.setValue(vin1, valVin1);
-		emulator.setExecuteAddress(minAddress.add(insnOffset));
-		emulator.executeInstruction(false);
-		return ms.getValue(vout);
-	}
-
-	// Convenience method for instructions like "op AL, BL"
-	long TestGenericBinop8(long insnOffset, long valAlBefore, long valBlBefore)
-	{
-		return TestInsnIn2Out(insnOffset, rAL, valAlBefore, rBL, valBlBefore, rAL);
-	}
-
-	// Convenience method for instructions like "op AL"
-	long TestGenericUnop8(long insnOffset, long valAlBefore)
-	{
-		return TestInsnIn1Out(insnOffset, rAL, valAlBefore, rAL);
-	}
-
-	// Convenience method for instructions like "op AX, BX"
-	long TestGenericBinop16(long insnOffset, long valAxBefore, long valBxBefore)
-	{
-		return TestInsnIn2Out(insnOffset, rAX, valAxBefore, rBX, valBxBefore, rAX);
-	}
-
-	// Convenience method for instructions like "op AX"
-	long TestGenericUnop16(long insnOffset, long valAxBefore)
-	{
-		return TestInsnIn1Out(insnOffset, rAX, valAxBefore, rAX);
-	}
-
-	// Convenience method for instructions like "op EAX, EBX"
-	long TestGenericBinop32(long insnOffset, long valEaxBefore, long valEbxBefore)
-	{
-		return TestInsnIn2Out(insnOffset, rEAX, valEaxBefore, rEBX, valEbxBefore, rEAX);
-	}
-
-	// Convenience method for instructions like "op EAX"
-	long TestGenericUnop32(long insnOffset, long valEaxBefore)
-	{
-		return TestInsnIn1Out(insnOffset, rEAX, valEaxBefore, rEAX);
-	}
-}
+};
 
 // Finally, the top-level script functionality. For now, it's just a demo of 
 // the analysis.
 public class ThreeValuedAbstractInterpreter extends GhidraScript {
 
-	public void TestAbstractTransformersAgainstEmulator() throws Exception {
-		EmulatorTester et = new EmulatorTester(currentProgram);
-		
-		// Copy the x86 machine code bytes for testing purposes into the emulator
-		Address minAddress = currentProgram.getMinAddress();
-		MemoryBlock testCodeBytesBlock = getMemoryBlock(minAddress);
-		byte[] testCodeBytes = new byte[(int)testCodeBytesBlock.getSize()];
-		testCodeBytesBlock.getBytes(minAddress, testCodeBytes);
-		et.InitializeCodeSection(testCodeBytes);
-
-		// Do a test. This is assuming that "X86Instructions.bin" is loaded as the
-		// underlying program in the Ghidra database.
-		long testOffset_ADD_AL_BL = 0;
-		long alValue = 0x12;
-		long blValue = 0x34;
-		long retVal = et.TestGenericBinop8(testOffset_ADD_AL_BL, alValue, blValue);
-		printf("add al, bl [al=%02x, bl=%02x] => %02x\n", alValue, blValue, retVal);
+	public void TestAbstractTransformers() throws Exception {
+		TransformerTester tt = new TransformerTester(currentProgram);
+		tt.TestBinaryPcode(PcodeOp.INT_ADD, 1, 0x12, 0x34);
 	}
 
 	void AbstractInterpret(InstructionIterator instructions, boolean setTF, int TFvalue, boolean debug) throws Exception
@@ -1989,13 +1883,15 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		
 		boolean debug = false;
 		
+		TestAbstractTransformers();
+		
 		// Abstract interpret under the assumption that TF = 0.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
+		// AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
 
 		// Abstract interpret under the assumption that TF = 1.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, debug);
+		// AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, debug);
 
 		// Abstract interpret under the assumption that TF has not been set.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
+		// AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
 	}
 }
