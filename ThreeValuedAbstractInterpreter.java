@@ -5,14 +5,13 @@
 //@menupath 
 //@toolbar 
 
-// This is a work in progress, and should not be considered production-quality
-// at the moment. The comments throughout indicate some potential future 
-// modifications:
+// This is a work in progress. Although the tests all pass, I'm still deciding
+// what the client-facing interface should look like. Additionally, the 
+// comments throughout indicate some potential future modifications:
 // * Perhaps an analysis-level change (relatively major code consequences)
 // * Performance/algorithmic optimizations (medium)
 // * Perhaps change the visitor to an interface (medium)
 // * Encapsulate analysis-level variation in handling of branches (minor)
-// * Add tests for approximated behavior (minor)
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.function.UnaryOperator; 
@@ -39,6 +38,7 @@ import ghidra.program.model.address.GenericAddressSpace;
 import ghidra.pcode.opbehavior.OpBehavior;
 import ghidra.pcode.opbehavior.BinaryOpBehavior;
 import ghidra.pcode.opbehavior.UnaryOpBehavior;
+import java.util.concurrent.ThreadLocalRandom;
 
 // This is here so that classes outside of the GhidraScript-derivative can 
 // print to the console. Those classes inherit the println() method, but 
@@ -752,6 +752,11 @@ final class TVLBitVectorUtil {
 		return new TVLBitVector(newArr);
 	}
 	
+	static TVLBitVector Join(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		return Map2(lhs, rhs, (x,y) -> x == y ? x : TVLBitVector.TVL_HALF);
+	}
+	
 	// Helper function for abstract shift left/right.
 	static TVLBitVector ShiftBvHelper(TVLBitVector lhs, TVLBitVector rhs, boolean bLeft, byte topFill) 
 	{
@@ -778,9 +783,14 @@ final class TVLBitVectorUtil {
 		// amount. However, in case any higher bits were either set or unknown in 
 		// the shift amount, we should return a bitvector initialized to the fill
 		// value.
+		TVLBitVector tooLarge = null;
 		for(int j = log2; j < rhsSize; j++) {
-			if(rhsVal[j] != TVLBitVector.TVL_0)
+			if(rhsVal[j] == TVLBitVector.TVL_1)
 				return Map(lhs, (b) -> topFill);
+			if(rhsVal[j] == TVLBitVector.TVL_HALF) {
+				tooLarge = Map(lhs, (b) -> topFill);
+				break;
+			}
 		}
 		
 		// Now, do the actual shift. We support shift amounts with unknown bits, 
@@ -802,10 +812,12 @@ final class TVLBitVectorUtil {
 				// not, so perform the shift and join the result with the original.
 				case TVLBitVector.TVL_HALF:
 				TVLBitVector possibleShifted = bLeft ? ShiftLeftInt(shifted, 1<<i) : ShiftRightInt(shifted, 1<<i, topFill);
-				shifted = Map2(shifted, possibleShifted, (x,y) -> x == y ? x : TVLBitVector.TVL_HALF);
+				shifted = Join(shifted, possibleShifted);
 				break;
 			}
 		}
+		if(tooLarge != null)
+			return Join(shifted, tooLarge);
 		return shifted;
 	}
 	
@@ -1744,7 +1756,7 @@ class TransformerTester {
 		return binaryBehave.evaluateBinary(out.getSize(), lhs.getSize(), valLhs, valRhs);
 	}
 	
-	Pair<Long,TVLBitVector> TestBinaryPcode(int op, int nBytes, long valLhs, long valRhs)
+	Pair<Long,TVLBitVector> TestBinaryPcode(int op, int nBytes, long valLhs, long valRhs, boolean randomize)
 	{
 		Varnode lhs, rhs, out;
 		switch(nBytes)
@@ -1758,8 +1770,15 @@ class TransformerTester {
 		PcodeOp p = new PcodeOp​(TestAddress, seqNo++, op, inputs, out);
 		long result = GetBinaryPcodeResult(p, valLhs, valRhs);
 		tvlai.AbstractState.clear();
-		tvlai.AbstractState.Associate(lhs, new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs));
-		tvlai.AbstractState.Associate(rhs, new TVLBitVector(new GhidraSizeAdapter(nBytes), valRhs));
+		TVLBitVector bvlhs = new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs);
+		TVLBitVector bvrhs = new TVLBitVector(new GhidraSizeAdapter(nBytes), valRhs);
+		if(randomize)
+		{
+			TVLBitVector bv = ThreadLocalRandom.current().nextBoolean() ? bvlhs : bvrhs;
+			bv.Value()[ThreadLocalRandom.current().nextInt(0, bv.Size())] = TVLBitVector.TVL_HALF;
+		}
+		tvlai.AbstractState.Associate(lhs, bvlhs);
+		tvlai.AbstractState.Associate(rhs, bvrhs);
 		try {
 			tvlai.visit(null, p);
 		}
@@ -1784,7 +1803,7 @@ class TransformerTester {
 		return unaryBehave.evaluateUnary(out.getSize(), lhs.getSize(), valLhs);
 	}
 
-	Pair<Long,TVLBitVector> TestUnaryPcode(int op, int nBytes, long valLhs)
+	Pair<Long,TVLBitVector> TestUnaryPcode(int op, int nBytes, long valLhs, boolean randomize)
 	{
 		Varnode lhs, out;
 		switch(nBytes)
@@ -1798,7 +1817,11 @@ class TransformerTester {
 		PcodeOp p = new PcodeOp​(TestAddress, seqNo++, op, inputs, out);
 		long result = GetUnaryPcodeResult(p, valLhs);
 		tvlai.AbstractState.clear();
-		tvlai.AbstractState.Associate(lhs, new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs));
+		TVLBitVector bv = new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs);
+		if(randomize)
+			bv.Value()[ThreadLocalRandom.current().nextInt(0, bv.Size())] = TVLBitVector.TVL_HALF;
+		tvlai.AbstractState.Associate(lhs, bv);
+		
 		try {
 			tvlai.visit(null, p);
 		}
@@ -1815,6 +1838,37 @@ class TransformerTester {
 // Finally, the top-level script functionality. For now, it's just a demo of 
 // the analysis.
 public class ThreeValuedAbstractInterpreter extends GhidraScript {
+
+	void PrintIfConcreteTestFailure(int op, long alValue, long blValue, Pair<Long, TVLBitVector> res) {
+		Pair<Integer,Long> cval = res.y.GetConstantValue();
+		if(cval == null)
+		{
+			Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract result non-constant "+res.y.toString());
+		}
+		// What the hell is this? Java was returning true for "cval.y!=res.x"
+		// when the values were identical. StackExchange suggested it was an
+		// int/long issue. I don't like that very much.
+		else if(!(new Long(cval.y).equals(new Long(res.x))))
+		{
+			Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" constant abstract result differs "+cval.y);						
+		}
+	}
+	
+	void PrintIfRandomTestFailure(int op, long alValue, long blValue, Pair<Long, TVLBitVector> res) {
+		byte[] AbsValue = res.y.Value();
+		long realRes = res.x;
+		for(int i = 0; i < AbsValue.length; i++)
+		{
+			long bit = (realRes >> i) & 1L;
+			if(AbsValue[i] != TVLBitVector.TVL_HALF)
+			{
+				if(bit == 0L && AbsValue[i] != TVLBitVector.TVL_0)
+					Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract "+res.y.toString()+" bit "+i+" differs: real "+bit+" abstract "+TVLBitVector.Representation[AbsValue[i]]);
+				else if(bit == 1L && AbsValue[i] != TVLBitVector.TVL_1)
+					Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract "+res.y.toString()+" bit "+i+" differs: real "+bit+" abstract "+TVLBitVector.Representation[AbsValue[i]]);
+			}
+		}
+	}
 
 	public void TestAbstractTransformers() throws Exception {
 		TransformerTester tt = new TransformerTester(currentProgram);
@@ -1850,36 +1904,19 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 				for(int i = 0; i < binaryOperators.length; i++)
 				{
 					int op = binaryOperators[i];
-					Pair<Long, TVLBitVector> res = tt.TestBinaryPcode(op, 1, alValue, blValue);
-					Pair<Integer,Long> cval = res.y.GetConstantValue();
-					if(cval == null)
-					{
-						Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract result non-constant "+res.y.toString());
-					}
-					// What the hell is this? Java was returning true for "cval.y!=res.x"
-					// when the values were identical. StackExchange suggested it was an
-					// int/long issue. I don't like that very much.
-					else if(!(new Long(cval.y).equals(new Long(res.x))))
-					{
-						Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" constant abstract result differs "+cval.y);						
-					}
+					Pair<Long, TVLBitVector> res = tt.TestBinaryPcode(op, 1, alValue, blValue, false);
+					PrintIfConcreteTestFailure(op, alValue, blValue, res);
+					res = tt.TestBinaryPcode(op, 1, alValue, blValue, true);
+					PrintIfRandomTestFailure(op, alValue, 0, res);
 				}
 			}
 			for(int i = 0; i < unaryOperators.length; i++)
 			{
 				int op = unaryOperators[i];
-				Pair<Long, TVLBitVector> res = tt.TestUnaryPcode(op, 1, alValue);
-				Pair<Integer,Long> cval = res.y.GetConstantValue();
-				if(cval == null)
-				{
-					Printer.println("Op "+op+", al = "+alValue+" result "+res.x+" abstract result non-constant "+res.y.toString());
-				}
-				// I just know this is going to bite me millions of times in the 
-				// future. Thanks, Obama.
-				else if(!(new Long(cval.y).equals(new Long(res.x))))
-				{
-					Printer.println("Op "+op+", al = "+alValue+" result "+res.x+" constant abstract result differs "+cval.y);						
-				}
+				Pair<Long, TVLBitVector> res = tt.TestUnaryPcode(op, 1, alValue, false);
+				PrintIfConcreteTestFailure(op, alValue, 0, res);
+				res = tt.TestUnaryPcode(op, 1, alValue, true);
+				PrintIfRandomTestFailure(op, alValue, 0, res);
 			}			
 		}
 		Printer.println("Testing operators done");
