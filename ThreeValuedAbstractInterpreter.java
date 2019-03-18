@@ -50,6 +50,7 @@ final class Printer {
 	static ConsoleService con;
 	static void Set(ConsoleService c) { con = c; }
 	static void println(String s) { con.println(s); }
+	static void printf(String format, Object... args) { con.print(String.format(format, args)); }
 }
 
 // Does Java really not ship with generic pairs or tuples? That seems like an
@@ -986,6 +987,39 @@ final class TVLBitVectorUtil {
 		return CreateSingle(OrTable[slt][eq]);
 	}
 	
+	// Unsigned overflow is last carry-out bit.
+	static TVLBitVector AddOverflow(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		Pair<TVLBitVector,Byte> p = AddInternal(lhs, rhs, false);
+		return CreateSingle(p.y);
+	}
+	
+	// Signed overflow is calculated from the signs of addition inputs/output.
+	static TVLBitVector AddCarry(TVLBitVector lhsBv, TVLBitVector rhsBv)
+	{
+		TVLBitVector sumBv   = TVLBitVectorUtil.Add(lhsBv, rhsBv);
+		byte lhsSign = lhsBv.Value()[lhsBv.Size()-1];
+		byte rhsSign = rhsBv.Value()[rhsBv.Size()-1];
+		byte sumSign = sumBv.Value()[sumBv.Size()-1];
+		byte signDiff1 = TVLBitVectorUtil.XorTable[lhsSign][sumSign];
+		byte signDiff2 = TVLBitVectorUtil.XorTable[rhsSign][sumSign];
+		byte signDiff3 = TVLBitVectorUtil.AndTable[signDiff1][signDiff2];
+		return CreateSingle(signDiff3);
+	}
+
+	// Signed overflow is calculated from the signs of subtraction inputs/output.
+	static TVLBitVector SubCarry(TVLBitVector lhsBv, TVLBitVector rhsBv)
+	{
+		TVLBitVector sumBv   = TVLBitVectorUtil.Subtract(lhsBv, rhsBv);
+		byte lhsSign = lhsBv.Value()[lhsBv.Size()-1];
+		byte rhsSign = rhsBv.Value()[rhsBv.Size()-1];
+		byte sumSign = sumBv.Value()[sumBv.Size()-1];
+		byte signDiff1 = TVLBitVectorUtil.XorTable[lhsSign][sumSign];
+		byte signDiff2 = TVLBitVectorUtil.XorTable[lhsSign][rhsSign];
+		byte signDiff3 = TVLBitVectorUtil.AndTable[signDiff1][signDiff2];
+		return CreateSingle(signDiff3);
+	}
+
 	// Helper function for multiplication. Basically, extend the bitvector to
 	// twice its size, and perform the shift.
 	static TVLBitVector WidenDoubleShlInt(TVLBitVector lhs, int amt)
@@ -1359,22 +1393,28 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		SetOutputToTop(pcode.getOutput());
 	}; 
 
-	// Unhandled, set top. Can implement in the future.
-	void visit_INT_CARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
-	{
-		SetOutputToTopBool(pcode.getOutput());
-	}; 
-
-	// Unhandled, set top. Can implement in the future.
 	void visit_INT_SBORROW(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
-		SetOutputToTopBool(pcode.getOutput());
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.SubCarry(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 
-	// Unhandled, set top. Can implement in the future.
+	void visit_INT_CARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.AddOverflow(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
+
 	void visit_INT_SCARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{
-		SetOutputToTopBool(pcode.getOutput());
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.AddCarry(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 
 	// These should be changed to maintain separate memory objects based upon
@@ -1714,9 +1754,9 @@ class TransformerTester {
 	Register rAL, rAX, rEAX;
 	Register rBL, rBX, rEBX;
 	Register rCL, rCX, rECX;
-	Varnode vAL, vAX, vEAX;
-	Varnode vBL, vBX, vEBX;
-	Varnode vCL, vCX, vECX;
+	public Varnode vAL, vAX, vEAX;
+	public Varnode vBL, vBX, vEBX;
+	public Varnode vCL, vCX, vECX;
 	TVLAbstractInterpreter tvlai;
 	AddressSpace TestAddressSpace;
 	Address TestAddress;
@@ -1743,6 +1783,11 @@ class TransformerTester {
 		rECX = l.getRegister("ECX"); vECX = vt.getVarnode(rECX);		
 	}
 	
+	PcodeOp CreatePcodeOp(int op, Varnode[] inputs, Varnode output)
+	{
+		return new PcodeOp​(TestAddress, seqNo++, op, inputs, output);
+	}
+	
 	long GetBinaryPcodeResult(PcodeOp pcode, long valLhs, long valRhs)
 	{
 		PcodeOpRaw raw = new PcodeOpRaw(pcode);
@@ -1767,7 +1812,7 @@ class TransformerTester {
 			default: assert(false); return null;
 		}
 		Varnode inputs[] = new Varnode[] { lhs, rhs };
-		PcodeOp p = new PcodeOp​(TestAddress, seqNo++, op, inputs, out);
+		PcodeOp p = CreatePcodeOp(op, inputs, out);
 		long result = GetBinaryPcodeResult(p, valLhs, valRhs);
 		tvlai.AbstractState.clear();
 		TVLBitVector bvlhs = new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs);
@@ -1814,7 +1859,7 @@ class TransformerTester {
 			default: assert(false); return null;
 		}
 		Varnode inputs[] = new Varnode[] { lhs };
-		PcodeOp p = new PcodeOp​(TestAddress, seqNo++, op, inputs, out);
+		PcodeOp p = CreatePcodeOp(op, inputs, out);
 		long result = GetUnaryPcodeResult(p, valLhs);
 		tvlai.AbstractState.clear();
 		TVLBitVector bv = new TVLBitVector(new GhidraSizeAdapter(nBytes), valLhs);
@@ -1850,7 +1895,7 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		// int/long issue. I don't like that very much.
 		else if(!(new Long(cval.y).equals(new Long(res.x))))
 		{
-			Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" constant abstract result differs "+cval.y);						
+			Printer.println("Op "+PcodeOp.getMnemonic(op)+", al = "+alValue+", bl = "+blValue+" result "+res.x+" constant abstract result differs "+cval.y);						
 		}
 	}
 	
@@ -1870,11 +1915,33 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		}
 	}
 
+	void TestUnimplemented() throws Exception {
+		TransformerTester tt = new TransformerTester(currentProgram);
+		int binaryOperators[] = new int[] {
+		};
+		long blValue = 0x55;
+		for(long alValue = 0; alValue < 0x100; alValue++)
+		{
+			for(int i = 0; i < binaryOperators.length; i++)
+			{
+				int op = binaryOperators[i];
+				PcodeOp p = tt.CreatePcodeOp(op, new Varnode[] {tt.vAL, tt.vBL}, tt.vCL);
+				long res = tt.GetBinaryPcodeResult(p, alValue, blValue);
+				Printer.printf("Op %s: [al = %02x, bl = %02x] => %02x\n", PcodeOp.getMnemonic(op), alValue, blValue, res);
+				TVLBitVector lhsBv   = new TVLBitVector(8, alValue);
+				TVLBitVector rhsBv   = new TVLBitVector(8, blValue);
+				Pair<TVLBitVector, Byte> pres = TVLBitVectorUtil.AddInternal(lhsBv, rhsBv, true);
+				Printer.printf("\tLast subtraction carry %1x\n", pres.x.Value()[pres.x.Size()-1]);
+			}
+		}
+	}
+	
 	public void TestAbstractTransformers() throws Exception {
 		TransformerTester tt = new TransformerTester(currentProgram);
 		int binaryOperators[] = new int[] {
 			PcodeOp.INT_ADD,
 			PcodeOp.INT_AND,
+			PcodeOp.INT_CARRY,
 			PcodeOp.INT_EQUAL,
 			PcodeOp.INT_LEFT,
 			PcodeOp.INT_LESS,
@@ -1883,6 +1950,8 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 			PcodeOp.INT_NOTEQUAL,
 			PcodeOp.INT_OR,
 			PcodeOp.INT_RIGHT,
+			PcodeOp.INT_SBORROW,
+			PcodeOp.INT_SCARRY,
 			PcodeOp.INT_SLESS,
 			PcodeOp.INT_SLESSEQUAL,
 			PcodeOp.INT_SRIGHT,
@@ -2017,7 +2086,8 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		
 		boolean debug = false;
 		
-		// TestAbstractTransformers();
+		//TestAbstractTransformers();
+		//TestUnimplemented();
 		
 		// Abstract interpret under the assumption that TF = 0.
 		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
