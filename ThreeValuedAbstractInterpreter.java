@@ -481,6 +481,11 @@ class TVLBitVector {
 		return new TVLBitVector(AbsValue.clone());
 	}
 	
+	public byte GetSign()
+	{
+		return AbsValue[AbsValue.length-1];
+	}
+	
 }
 
 // This is a utility class for implementing the abstract transformers.
@@ -623,7 +628,7 @@ final class TVLBitVectorUtil {
 	// Abstract three-valued bitwise sign extension, bit size destination.
 	static TVLBitVector SignExtend(TVLBitVector lhs, int newSize)
 	{
-		return Extend(lhs, newSize, lhs.Value()[lhs.Size()-1]);
+		return Extend(lhs, newSize, lhs.GetSign());
 	}
 
 	// Abstract three-valued bitwise sign extension, byte size destination.
@@ -837,7 +842,7 @@ final class TVLBitVectorUtil {
 	// Abstract three-valued signed shift right (including by variable amounts).
 	static TVLBitVector ShiftRightArithmeticBv(TVLBitVector lhs, TVLBitVector rhs) 
 	{
-		return ShiftBvHelper(lhs, rhs, false, lhs.Value()[lhs.Size()-1]);
+		return ShiftBvHelper(lhs, rhs, false, lhs.GetSign());
 	}
 
 	// Table for x + y + c ...
@@ -973,9 +978,7 @@ final class TVLBitVectorUtil {
 	static TVLBitVector SLT(TVLBitVector lhs, TVLBitVector rhs) 
 	{
 		byte ult = ULT(lhs,rhs).Value()[0];
-		byte lhsSign  = lhs.Value()[lhs.Size()-1];
-		byte rhsSign  = rhs.Value()[rhs.Size()-1];
-		byte signDiff = XorTable[lhsSign][rhsSign];
+		byte signDiff = XorTable[lhs.GetSign()][rhs.GetSign()];
 		return CreateSingle(XorTable[signDiff][ult]);
 	}
 
@@ -998,11 +1001,9 @@ final class TVLBitVectorUtil {
 	static TVLBitVector AddCarry(TVLBitVector lhsBv, TVLBitVector rhsBv)
 	{
 		TVLBitVector sumBv   = TVLBitVectorUtil.Add(lhsBv, rhsBv);
-		byte lhsSign = lhsBv.Value()[lhsBv.Size()-1];
-		byte rhsSign = rhsBv.Value()[rhsBv.Size()-1];
-		byte sumSign = sumBv.Value()[sumBv.Size()-1];
-		byte signDiff1 = TVLBitVectorUtil.XorTable[lhsSign][sumSign];
-		byte signDiff2 = TVLBitVectorUtil.XorTable[rhsSign][sumSign];
+		byte sumSign = sumBv.GetSign();
+		byte signDiff1 = TVLBitVectorUtil.XorTable[lhsBv.GetSign()][sumSign];
+		byte signDiff2 = TVLBitVectorUtil.XorTable[rhsBv.GetSign()][sumSign];
 		byte signDiff3 = TVLBitVectorUtil.AndTable[signDiff1][signDiff2];
 		return CreateSingle(signDiff3);
 	}
@@ -1011,29 +1012,16 @@ final class TVLBitVectorUtil {
 	static TVLBitVector SubCarry(TVLBitVector lhsBv, TVLBitVector rhsBv)
 	{
 		TVLBitVector sumBv   = TVLBitVectorUtil.Subtract(lhsBv, rhsBv);
-		byte lhsSign = lhsBv.Value()[lhsBv.Size()-1];
-		byte rhsSign = rhsBv.Value()[rhsBv.Size()-1];
-		byte sumSign = sumBv.Value()[sumBv.Size()-1];
-		byte signDiff1 = TVLBitVectorUtil.XorTable[lhsSign][sumSign];
-		byte signDiff2 = TVLBitVectorUtil.XorTable[lhsSign][rhsSign];
+		byte lhsSign = lhsBv.GetSign();
+		byte signDiff1 = TVLBitVectorUtil.XorTable[lhsSign][sumBv.GetSign()];
+		byte signDiff2 = TVLBitVectorUtil.XorTable[lhsSign][rhsBv.GetSign()];
 		byte signDiff3 = TVLBitVectorUtil.AndTable[signDiff1][signDiff2];
 		return CreateSingle(signDiff3);
 	}
 
-	// Helper function for multiplication. Basically, extend the bitvector to
-	// twice its size, and perform the shift.
-	static TVLBitVector WidenDoubleShlInt(TVLBitVector lhs, int amt)
-	{
-		TVLBitVector widened = ZeroExtend(lhs, lhs.Size()*2);
-		return ShiftLeftInt(widened, amt);
-	}
-	
-	// Abstract three-valued bitwise multiplication. I've translated my OCaml 
-	// code very literally here. I could perhaps get away with not widening the
-	// partial products? Need to think about that more. Tests would help.
+	// Abstract three-valued bitwise multiplication.
 	static TVLBitVector Multiply(TVLBitVector lhs, TVLBitVector rhs) 
 	{
-		
 		// Size check.
 		int s1 = lhs.Size();
 		int s2 = rhs.Size();
@@ -1041,7 +1029,7 @@ final class TVLBitVectorUtil {
 			SizeMismatchException("Multiply", s1, s2);
 		
 		// Partial product begins with zero
-		TVLBitVector partialProduct = WidenDoubleShlInt(Map(lhs, (b) -> TVLBitVector.TVL_0), 0);
+		TVLBitVector partialProduct = Map(lhs, (b) -> TVLBitVector.TVL_0);
 
 		// For multiplications by unknown bits, create a three-valued bitvector 
 		// where all of the 1-bits are replaced by 1/2 bits, signifying that we 
@@ -1058,17 +1046,116 @@ final class TVLBitVectorUtil {
 				case TVLBitVector.TVL_0:
 				break;
 				case TVLBitVector.TVL_1:
-				partialProduct = Add(partialProduct, WidenDoubleShlInt(lhs, i));
+				partialProduct = Add(partialProduct, ShiftLeftInt(lhs, i));
 				break;
 				case TVLBitVector.TVL_HALF:
-				partialProduct = Add(partialProduct, WidenDoubleShlInt(lhsHalves, i));
+				partialProduct = Add(partialProduct, ShiftLeftInt(lhsHalves, i));
 				break;
 			}
 		}
-		// Truncate down to the lower bits. Were the upper bits necessary? They 
-		// used to be in the OCaml version, where the multiplication operator 
-		// returned a quantity twice as big as the original.
-		return new TVLBitVector(Arrays.copyOfRange(partialProduct.Value(), 0, s1));
+		return partialProduct;
+	}
+	
+	static Pair<TVLBitVector, TVLBitVector> DivideInner(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		// Size check.
+		int s1 = lhs.Size();
+		int s2 = rhs.Size();
+		if(s1 != s2)
+			SizeMismatchException("Multiply", s1, s2);		
+
+		Pair<Integer,Long> rhsConst = rhs.GetConstantValue();
+		if(rhsConst != null && rhsConst.y == 0)
+		{
+			TVLBitVector top1 = Map(lhs, (b) -> TVLBitVector.TVL_HALF);
+			TVLBitVector top2 = Map(lhs, (b) -> TVLBitVector.TVL_HALF);			
+			return new Pair<TVLBitVector, TVLBitVector>(top1, top2);
+		}
+		
+		// Quotient, remainder begin as zero
+		TVLBitVector quotient  = Map(lhs, (b) -> TVLBitVector.TVL_0);
+		TVLBitVector remainder = Map(lhs, (b) -> TVLBitVector.TVL_0);
+		for(int i = s1-1; i >= 0; i--)
+		{
+			remainder = ShiftLeftInt(remainder, 1);
+			remainder.Value()[0] = lhs.Value()[i];
+			TVLBitVector isLEQ = ULE(rhs, remainder);
+			byte leq = isLEQ.Value()[0];
+			quotient = ShiftLeftInt(quotient, 1);
+			quotient.Value()[0] = leq;
+			switch(leq)
+			{
+				case TVLBitVector.TVL_0:
+				continue;
+				case TVLBitVector.TVL_1:
+				remainder = Subtract(remainder, rhs);
+				break;
+				case TVLBitVector.TVL_HALF:
+				TVLBitVector remainderPossibly = Subtract(remainder, rhs);
+				remainder = Join(remainderPossibly, remainder);
+				break;
+			}
+		}
+		return new Pair<TVLBitVector,TVLBitVector>(quotient,remainder);
+	}
+	
+	static Pair<Pair<TVLBitVector, Byte>, Pair<TVLBitVector, Byte>> SignedDivideHelper(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		return new Pair(SignedDivideHelper(lhs), SignedDivideHelper(rhs));
+	}
+	
+	static TVLBitVector UnsignedDivide(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		Pair<TVLBitVector,TVLBitVector> res = DivideInner(lhs,rhs);
+		return res.x;
+	}
+
+	static TVLBitVector UnsignedRemainder(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		Pair<TVLBitVector,TVLBitVector> res = DivideInner(lhs,rhs);
+		return res.y;
+	}
+
+	static TVLBitVector SignedDivideHelper(TVLBitVector bv, byte sign)
+	{
+		switch(sign)
+		{
+			case TVLBitVector.TVL_0:
+			return bv;
+			case TVLBitVector.TVL_1:
+			return Neg(bv);
+			case TVLBitVector.TVL_HALF:
+			TVLBitVector negatedPossibly = Neg(bv);
+			return Join(negatedPossibly, bv);
+		}
+		assert(false); 
+		return null;
+	}
+
+	static Pair<TVLBitVector, Byte> SignedDivideHelper(TVLBitVector bv)
+	{
+		byte sign = bv.GetSign();
+		return new Pair<TVLBitVector, Byte>(SignedDivideHelper(bv, sign), sign);
+	}
+
+	static TVLBitVector SignedDivideInner(TVLBitVector lhs, TVLBitVector rhs, boolean want_quotient)
+	{
+		Pair<TVLBitVector,Byte> lhsSignInfo = SignedDivideHelper(lhs);
+		Pair<TVLBitVector,Byte> rhsSignInfo = SignedDivideHelper(rhs);
+		Pair<TVLBitVector,TVLBitVector> divisionResult = DivideInner(lhsSignInfo.x, rhsSignInfo.x);
+		if(want_quotient)
+			return SignedDivideHelper(divisionResult.x, XorTable[lhsSignInfo.y][rhsSignInfo.y]);
+		return SignedDivideHelper(divisionResult.y, lhsSignInfo.y);
+	}
+
+	static TVLBitVector SignedDivide(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		return SignedDivideInner(lhs, rhs, true);
+	}
+
+	static TVLBitVector SignedRemainder(TVLBitVector lhs, TVLBitVector rhs)
+	{
+		return SignedDivideInner(lhs, rhs, false);
 	}
 }
 
@@ -1369,54 +1456,6 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		AbstractState.Associate(output, TVLBitVectorUtil.CreateHalfBit());
 	}
 	
-	// Unhandled, set top (future: if constant, use constant values)
-	void visit_INT_DIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
-	{
-		SetOutputToTop(pcode.getOutput());
-	}; 
-
-	// Unhandled, set top (future: if constant, use constant values)
-	void visit_INT_REM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
-	{
-		SetOutputToTop(pcode.getOutput());
-	}; 
-
-	// Unhandled, set top (future: if constant, use constant values)
-	void visit_INT_SDIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
-	{
-		SetOutputToTop(pcode.getOutput());
-	}; 
-
-	// Unhandled, set top (future: if constant, use constant values)
-	void visit_INT_SREM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 	
-	{
-		SetOutputToTop(pcode.getOutput());
-	}; 
-
-	void visit_INT_SBORROW(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
-	{
-		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
-		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
-		TVLBitVector result = TVLBitVectorUtil.SubCarry(lhs,rhs);
-		AbstractState.Associate(pcode.getOutput(), result);
-	}; 
-
-	void visit_INT_CARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
-	{
-		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
-		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
-		TVLBitVector result = TVLBitVectorUtil.AddOverflow(lhs,rhs);
-		AbstractState.Associate(pcode.getOutput(), result);
-	}; 
-
-	void visit_INT_SCARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
-	{
-		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
-		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
-		TVLBitVector result = TVLBitVectorUtil.AddCarry(lhs,rhs);
-		AbstractState.Associate(pcode.getOutput(), result);
-	}; 
-
 	// These should be changed to maintain separate memory objects based upon
 	// the Varnode that dictates the space underlying the load/store.
 	void visit_LOAD(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
@@ -1499,6 +1538,20 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		TVLBitVector result = TVLBitVectorUtil.And(lhs,rhs);
 		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
+	void visit_INT_CARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.AddOverflow(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
+	void visit_INT_DIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.UnsignedDivide(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
 	void visit_INT_EQUAL(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
@@ -1554,11 +1607,39 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		TVLBitVector result = TVLBitVectorUtil.Or(lhs,rhs);
 		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
+	void visit_INT_REM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.UnsignedRemainder(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
 	void visit_INT_RIGHT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
 	{
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.ShiftRightBv(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
+	void visit_INT_SBORROW(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.SubCarry(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
+	void visit_INT_SCARRY(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.AddCarry(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
+	void visit_INT_SDIV(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.SignedDivide(lhs,rhs);
 		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_SEXT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
@@ -1580,6 +1661,13 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
 		TVLBitVector result = TVLBitVectorUtil.SLE(lhs,rhs);
+		AbstractState.Associate(pcode.getOutput(), result);
+	}; 
+	void visit_INT_SREM(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 	
+	{
+		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
+		TVLBitVector rhs = visit_Varnode(instr,pcode,pcode.getInput(1));
+		TVLBitVector result = TVLBitVectorUtil.SignedRemainder(lhs,rhs);
 		AbstractState.Associate(pcode.getOutput(), result);
 	}; 
 	void visit_INT_SRIGHT(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
@@ -1884,19 +1972,20 @@ class TransformerTester {
 // the analysis.
 public class ThreeValuedAbstractInterpreter extends GhidraScript {
 
+	boolean CompareLongs(long l1, long l2)
+	{
+		return new Long(l1).equals(new Long(l2));
+	}
+	
 	void PrintIfConcreteTestFailure(int op, long alValue, long blValue, Pair<Long, TVLBitVector> res) {
 		Pair<Integer,Long> cval = res.y.GetConstantValue();
 		if(cval == null)
-		{
-			Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract result non-constant "+res.y.toString());
-		}
+			Printer.printf("Op %s: [al = %02x, bl = %02x] => non-constant %s\n", PcodeOp.getMnemonic(op), alValue, blValue, res.y.toString());
 		// What the hell is this? Java was returning true for "cval.y!=res.x"
 		// when the values were identical. StackExchange suggested it was an
 		// int/long issue. I don't like that very much.
-		else if(!(new Long(cval.y).equals(new Long(res.x))))
-		{
-			Printer.println("Op "+PcodeOp.getMnemonic(op)+", al = "+alValue+", bl = "+blValue+" result "+res.x+" constant abstract result differs "+cval.y);						
-		}
+		else if(!CompareLongs(cval.y,res.x))
+			Printer.printf("Op %s: [al = %02x, bl = %02x] => %02x real, %02x abstract\n", PcodeOp.getMnemonic(op), alValue, blValue, res.x, cval.y);
 	}
 	
 	void PrintIfRandomTestFailure(int op, long alValue, long blValue, Pair<Long, TVLBitVector> res) {
@@ -1907,10 +1996,9 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 			long bit = (realRes >> i) & 1L;
 			if(AbsValue[i] != TVLBitVector.TVL_HALF)
 			{
-				if(bit == 0L && AbsValue[i] != TVLBitVector.TVL_0)
-					Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract "+res.y.toString()+" bit "+i+" differs: real "+bit+" abstract "+TVLBitVector.Representation[AbsValue[i]]);
-				else if(bit == 1L && AbsValue[i] != TVLBitVector.TVL_1)
-					Printer.println("Op "+op+", al = "+alValue+", bl = "+blValue+" result "+res.x+" abstract "+res.y.toString()+" bit "+i+" differs: real "+bit+" abstract "+TVLBitVector.Representation[AbsValue[i]]);
+				if( (bit == 0L && AbsValue[i] != TVLBitVector.TVL_0) ||
+				    (bit == 1L && AbsValue[i] != TVLBitVector.TVL_1) )
+					Printer.printf("Op %s: [al = %02x, bl = %02x] => %02x real, %s abstract, bit %d differs [%d/%s]\n", PcodeOp.getMnemonic(op), alValue, blValue, res.x, res.y.toString(), i, bit, TVLBitVector.Representation[AbsValue[i]]);
 			}
 		}
 	}
@@ -1942,6 +2030,7 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 			PcodeOp.INT_ADD,
 			PcodeOp.INT_AND,
 			PcodeOp.INT_CARRY,
+			PcodeOp.INT_DIV,
 			PcodeOp.INT_EQUAL,
 			PcodeOp.INT_LEFT,
 			PcodeOp.INT_LESS,
@@ -1949,11 +2038,14 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 			PcodeOp.INT_MULT,
 			PcodeOp.INT_NOTEQUAL,
 			PcodeOp.INT_OR,
+			PcodeOp.INT_REM,
 			PcodeOp.INT_RIGHT,
 			PcodeOp.INT_SBORROW,
 			PcodeOp.INT_SCARRY,
+			PcodeOp.INT_SDIV,
 			PcodeOp.INT_SLESS,
 			PcodeOp.INT_SLESSEQUAL,
+			PcodeOp.INT_SREM,
 			PcodeOp.INT_SRIGHT,
 			PcodeOp.INT_SUB,
 			PcodeOp.INT_XOR
@@ -1973,6 +2065,11 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 				for(int i = 0; i < binaryOperators.length; i++)
 				{
 					int op = binaryOperators[i];
+					if(op == PcodeOp.INT_DIV || op == PcodeOp.INT_REM || op == PcodeOp.INT_SDIV || op == PcodeOp.INT_SREM)
+					{
+						if(CompareLongs(blValue,0))
+							continue;
+					}
 					Pair<Long, TVLBitVector> res = tt.TestBinaryPcode(op, 1, alValue, blValue, false);
 					PrintIfConcreteTestFailure(op, alValue, blValue, res);
 					res = tt.TestBinaryPcode(op, 1, alValue, blValue, true);
