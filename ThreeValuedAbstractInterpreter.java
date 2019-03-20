@@ -40,6 +40,11 @@ import ghidra.pcode.opbehavior.BinaryOpBehavior;
 import ghidra.pcode.opbehavior.UnaryOpBehavior;
 import java.util.concurrent.ThreadLocalRandom;
 
+// For path-based abstract interpretation 
+import ghidra.app.util.PseudoDisassembler;
+import ghidra.app.util.PseudoInstruction;
+
+
 // This is here so that classes outside of the GhidraScript-derivative can 
 // print to the console. Those classes inherit the println() method, but 
 // classes outside of that need to access the ConsoleService object. Basically
@@ -63,6 +68,17 @@ class Pair<X, Y> {
 		this.y = y; 
 	} 
 } 
+
+final class JavaUtil {
+	// What the hell is this? Java was returning true for "cval.y!=res.x"
+	// when the values were identical. StackExchange suggested it was an
+	// int/long issue. I don't like that very much.
+	static boolean CompareLongs(long l1, long l2)
+	{
+		return new Long(l1).equals(new Long(l2));
+	}
+}	
+	
 
 // Below we define a generic visitor class that can be used to visit pcode 
 // objects. By default, all methods throw this exception. Derived classes 
@@ -758,9 +774,18 @@ final class TVLBitVectorUtil {
 		return new TVLBitVector(newArr);
 	}
 	
+	// Table for x ^ y ...
+	static final byte[][] JoinTable = { 
+		//     y = 0                   y = 1/2                y = 1
+		{TVLBitVector.TVL_0,     TVLBitVector.TVL_HALF, TVLBitVector.TVL_HALF}, // x = 0
+		{TVLBitVector.TVL_HALF,  TVLBitVector.TVL_HALF, TVLBitVector.TVL_HALF}, // x = 1/2
+		{TVLBitVector.TVL_HALF,  TVLBitVector.TVL_HALF, TVLBitVector.TVL_1},    // x = 1
+	};
+	
+	// Pointwise extension of the bitwise join
 	static TVLBitVector Join(TVLBitVector lhs, TVLBitVector rhs)
 	{
-		return Map2(lhs, rhs, (x,y) -> x == y ? x : TVLBitVector.TVL_HALF);
+		return Map2(lhs, rhs, (l,r) -> JoinTable[l][r]);
 	}
 	
 	// Helper function for abstract shift left/right.
@@ -1312,13 +1337,14 @@ class TVLAbstractGhidraState {
 		Uniques.clear();
 	}
 	
-	// Associate a varnode *as though it was a variable* with a three-valued
-	// bitvector. Again, as above, should be changed into memory writes.
+	// Associate a varnode with a three-valued bitvector.
 	public void Associate(Varnode dest, TVLBitVector bv)
 	{
-		//Printer.println("Associate(): "+dest.toString()+" -> "+bv.toString());
 		if(dest.isRegister())
+		{
+			Printer.println("Associate(): "+dest.toString()+" -> "+bv.toString());
 			Registers.StoreWholeQuantity(dest, bv);
+		}
 		else if(dest.isUnique())
 			Uniques.StoreWholeQuantity(dest,bv);
 		else
@@ -1422,19 +1448,6 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	// Below here are the abstract interpretations of the pcode operations.
 	//
 	
-	// For the branch instructions, I think it makes sense to treat this 
-	// container class as being an intermediary class in a hierarchy, so as to
-	// simplify applying the analysis in local vs. global contexts. I.e. leave
-	// these unimplemented, and derive classes for local and global analyses that
-	// treat them differently.
-	// * PcodeOp.BRANCH
-	// * PcodeOp.BRANCHIND
-	// * PcodeOp.CALL
-	// * PcodeOp.CALLIND
-	// * PcodeOp.CALLOTHER
-	// * PcodeOp.CBRANCH
-	// * PcodeOp.RETURN
-
 	// Are these described in the documentation? Currently I let them throw 
 	// exceptions.
 	// * PcodeOp.SEGMENTOP
@@ -1455,6 +1468,20 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	{
 		AbstractState.Associate(output, TVLBitVectorUtil.CreateHalfBit());
 	}
+	
+	// For the branch instructions, I think it makes sense to treat this 
+	// container class as being an intermediary class in a hierarchy, so as to
+	// simplify applying the analysis in local vs. global contexts. I.e. leave
+	// these unimplemented, and derive classes for local and global analyses that
+	// treat them differently.
+	// * PcodeOp.BRANCH
+	// * PcodeOp.BRANCHIND
+	// * PcodeOp.CALL
+	// * PcodeOp.CALLIND
+	// * PcodeOp.CALLOTHER
+	// * PcodeOp.CBRANCH
+	// * PcodeOp.RETURN
+	void visit_BRANCH(Instruction instr, PcodeOp pcode) {}
 	
 	// These should be changed to maintain separate memory objects based upon
 	// the Varnode that dictates the space underlying the load/store.
@@ -1517,7 +1544,6 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
 		AbstractState.Associate(pcode.getOutput(), lhs);		
 	}; 
-
 	void visit_INT_2COMP(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException 
 	{ 
 		TVLBitVector lhs = visit_Varnode(instr,pcode,pcode.getInput(0));
@@ -1838,6 +1864,100 @@ class TVLAbstractInterpreter extends PcodeOpVisitor<TVLBitVector> {
 	}; 
 }
 
+class PathBasedTVLAbstractInterpreter extends TVLAbstractInterpreter {
+	TVLBitVector LastBranchCondition;
+	TVLBitVector LastIndirectBranchDestination;
+	Program currentProgram;
+	public PathBasedTVLAbstractInterpreter(Program p)
+	{
+		super(p.getLanguage().isBigEndian());
+		currentProgram = p;
+	}
+	
+	void VisitorBefore(Instruction instr, PcodeOp pcode)
+	{
+		LastBranchCondition = null;
+		LastIndirectBranchDestination = null;
+	};
+	
+	void visit_BRANCHIND(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		TVLBitVector addr = visit_Varnode(instr,pcode,pcode.getInput(0));
+		LastIndirectBranchDestination = addr;
+		Pair<Integer,Long> p = addr.GetConstantValue();
+		if(p != null)
+		{
+			Printer.printf("Resolved indirect branch target for %s: %x\n", instr.toString(), p.y);
+		}
+	}
+
+	void visit_CBRANCH(Instruction instr, PcodeOp pcode) throws VisitorUnimplementedException
+	{
+		TVLBitVector condition = visit_Varnode(instr,pcode,pcode.getInput(1));
+		LastBranchCondition = condition;
+	}
+	
+	void AbstractInterpretPath(Address startEa, Address endEa) throws Exception
+	{
+		AddressSpace defaultAS = currentProgram.getAddressFactory().getDefaultAddressSpace();
+		Language l = currentProgram.getLanguage();
+		PseudoDisassembler pdis = new PseudoDisassembler(currentProgram);
+		Address current = startEa;
+		while(!endEa.equals(current))
+		{
+			PseudoInstruction instr = pdis.disassemble(current);
+			Printer.printf("%s: %s\n", current.toString(), instr);
+			String mnem = instr.getMnemonicString();
+			if(mnem.equals("RET"))
+				break;
+			PcodeOp[] pcode = instr.getPcode();
+			try {
+				for(int i = 0; i < pcode.length; i++) {
+					visit(instr,pcode[i]);
+				}
+			}
+			catch(VisitorUnimplementedException e)
+			{
+				Printer.printf("Caught VisitorUnimplementedException: %s\n", e.toString());
+				return;
+			}
+			Address[] flows = instr.getFlows();
+			int numFlows = flows.length;
+			Address fallThrough = instr.getFallThrough();
+			current = null;
+			if(LastIndirectBranchDestination != null)
+			{
+				Pair<Integer,Long> p = LastIndirectBranchDestination.GetConstantValue();
+				if(p != null)
+					current = defaultAS.getAddress(p.y);
+			}			
+			else if(LastBranchCondition != null)
+			{				
+				Pair<Integer,Long> p = LastBranchCondition.GetConstantValue();
+				if(p != null)
+				{
+					boolean wasTaken = JavaUtil.CompareLongs(p.y,1L);
+					Printer.printf("%s %s: resolved opaque predicate! always %staken\n", current.toString(), instr.toString(), wasTaken ? "" : "not ");
+					if(wasTaken)
+						current = flows[0];
+					else
+						current = fallThrough;
+				}
+			}
+			else if(numFlows == 1 && fallThrough == null)
+				current = flows[0];
+			else if(numFlows == 0)
+				current = fallThrough;
+			
+			if(current == null)
+			{
+				Printer.println("\tCould not resolve branch, terminating...");
+				break;
+			}
+		}
+	}
+}
+
 class TransformerTester {
 	Register rAL, rAX, rEAX;
 	Register rBL, rBX, rEBX;
@@ -1972,19 +2092,11 @@ class TransformerTester {
 // the analysis.
 public class ThreeValuedAbstractInterpreter extends GhidraScript {
 
-	boolean CompareLongs(long l1, long l2)
-	{
-		return new Long(l1).equals(new Long(l2));
-	}
-	
 	void PrintIfConcreteTestFailure(int op, long alValue, long blValue, Pair<Long, TVLBitVector> res) {
 		Pair<Integer,Long> cval = res.y.GetConstantValue();
 		if(cval == null)
 			Printer.printf("Op %s: [al = %02x, bl = %02x] => non-constant %s\n", PcodeOp.getMnemonic(op), alValue, blValue, res.y.toString());
-		// What the hell is this? Java was returning true for "cval.y!=res.x"
-		// when the values were identical. StackExchange suggested it was an
-		// int/long issue. I don't like that very much.
-		else if(!CompareLongs(cval.y,res.x))
+		else if(!JavaUtil.CompareLongs(cval.y,res.x))
 			Printer.printf("Op %s: [al = %02x, bl = %02x] => %02x real, %02x abstract\n", PcodeOp.getMnemonic(op), alValue, blValue, res.x, cval.y);
 	}
 	
@@ -2006,6 +2118,8 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 	void TestUnimplemented() throws Exception {
 		TransformerTester tt = new TransformerTester(currentProgram);
 		int binaryOperators[] = new int[] {
+			//PcodeOp.PTRADD,
+			PcodeOp.PTRSUB,
 		};
 		long blValue = 0x55;
 		for(long alValue = 0; alValue < 0x100; alValue++)
@@ -2016,10 +2130,6 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 				PcodeOp p = tt.CreatePcodeOp(op, new Varnode[] {tt.vAL, tt.vBL}, tt.vCL);
 				long res = tt.GetBinaryPcodeResult(p, alValue, blValue);
 				Printer.printf("Op %s: [al = %02x, bl = %02x] => %02x\n", PcodeOp.getMnemonic(op), alValue, blValue, res);
-				TVLBitVector lhsBv   = new TVLBitVector(8, alValue);
-				TVLBitVector rhsBv   = new TVLBitVector(8, blValue);
-				Pair<TVLBitVector, Byte> pres = TVLBitVectorUtil.AddInternal(lhsBv, rhsBv, true);
-				Printer.printf("\tLast subtraction carry %1x\n", pres.x.Value()[pres.x.Size()-1]);
 			}
 		}
 	}
@@ -2067,7 +2177,7 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 					int op = binaryOperators[i];
 					if(op == PcodeOp.INT_DIV || op == PcodeOp.INT_REM || op == PcodeOp.INT_SDIV || op == PcodeOp.INT_SREM)
 					{
-						if(CompareLongs(blValue,0))
+						if(JavaUtil.CompareLongs(blValue,0))
 							continue;
 					}
 					Pair<Long, TVLBitVector> res = tt.TestBinaryPcode(op, 1, alValue, blValue, false);
@@ -2163,7 +2273,7 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		}
 		
 	}
-	
+		
 	// Finally, the main method.
 	@Override
 	public void run() throws Exception {
@@ -2175,6 +2285,8 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		// debug information.
 		Printer.Set(tool.getService(ConsoleService.class));
 
+		// 10015204
+		
 		// Get the selected set of instructions, or all of them.
 		AddressSetView set = currentSelection;
 		if (set == null || set.isEmpty()) {
@@ -2187,12 +2299,33 @@ public class ThreeValuedAbstractInterpreter extends GhidraScript {
 		//TestUnimplemented();
 		
 		// Abstract interpret under the assumption that TF = 0.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
+		//AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  0, debug);
 
 		// Abstract interpret under the assumption that TF = 1.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, debug);
+		//AbstractInterpret(currentProgram.getListing().getInstructions(set, true), true,  1, debug);
 
 		// Abstract interpret under the assumption that TF has not been set.
-		AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
+		//AbstractInterpret(currentProgram.getListing().getInstructions(set, true), false, 0, debug);
+		
+		AddressSpace defaultAS = currentProgram.getAddressFactory().getDefaultAddressSpace();
+		PathBasedTVLAbstractInterpreter pb = new PathBasedTVLAbstractInterpreter(currentProgram);
+		if(false)
+		{
+			Address startEa  = defaultAS.getAddress(0x10015204);
+			Address endEa    = defaultAS.getAddress(0x10013956);
+			Address startEa2 = defaultAS.getAddress(0x100166d2);
+			pb.AbstractInterpretPath(startEa,  endEa);
+			pb.AbstractInterpretPath(startEa2, endEa);
+		}
+		
+		if(true)
+		{
+			Address startEaArm = defaultAS.getAddress(0);
+			Address endEaArm = defaultAS.getAddress(0x58);
+			Language l = currentProgram.getLanguage();
+			VarnodeTranslator vt = new VarnodeTranslator​(currentProgram);		
+			pb.AbstractState.Associate(vt.getVarnode(l.getRegister("sp")), new TVLBitVector(32, 0x1000));
+			pb.AbstractInterpretPath(startEaArm, endEaArm);
+		}
 	}
 }
