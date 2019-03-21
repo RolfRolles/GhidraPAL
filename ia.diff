@@ -1,40 +1,32 @@
-1897,1912c1897
-<  # AF not implemented
-<  # Rolf: changes here
-<  local ext1:8 = ~zext(result);
-<  local ext2 = ext1 >> 32;
-<  local ext3 = ext1 ^ ext2;
-<  local ext4 = ext3 >> 16;
-<  local ext5 = ext3 ^ ext4;
-<  local ext6 = ext5 >> 8;
-<  local ext7 = ext5 ^ ext6;
-<  local ext8 = ext7 >> 4;
-<  local ext9 = ext7 ^ ext8;
-<  local extA = ext9 >> 2;
-<  local extB = ext9 ^ extA;
-<  local extC = extB >> 1;
-<  local extD = extB ^ extC;
-<  PF = (extD != 0);
+1897c1897,1908
+<  # PF, AF not implemented
 ---
->  # PF, AF not implemented
-1924,1941c1909
-< 
-<  # Rolf: changes here
-<  local ext1:8 = ~zext(result);
-<  local ext2 = ext1 >> 32;
-<  local ext3 = ext1 ^ ext2;
-<  local ext4 = ext3 >> 16;
-<  local ext5 = ext3 ^ ext4;
-<  local ext6 = ext5 >> 8;
-<  local ext7 = ext5 ^ ext6;
-<  local ext8 = ext7 >> 4;
-<  local ext9 = ext7 ^ ext8;
-<  local extA = ext9 >> 2;
-<  local extB = ext9 ^ extA;
-<  local extC = extB >> 1;
-<  local extD = extB ^ extC;
-<  local newPF = (extD != 0);
-<  PF = (!notzero & PF) | (notzero & newPF);
-<  # AF not implemented
+>  # AF not implemented
+>  # Rolf: changes here
+>  local ext1:8 = zext(result);
+>  local ext2 = ext1 >> 4;
+>  local ext3 = ext1 ^ ext2;
+>  local ext4 = ext3 >> 2;
+>  local ext5 = ext3 ^ ext4;
+>  local ext6 = ext5 >> 1;
+>  local ext7 = ext5 ^ ext6;
+>  local ext8:8 = 1;
+>  local ext9 = ext7 & ext8;
+>  PF = (ext9 == 0);
+1909c1920,1933
+<  # PF, AF not implemented
 ---
->  # PF, AF not implemented
+> 
+>  # Rolf: changes here
+>  local ext1:8 = zext(result);
+>  local ext2 = ext1 >> 4;
+>  local ext3 = ext1 ^ ext2;
+>  local ext4 = ext3 >> 2;
+>  local ext5 = ext3 ^ ext4;
+>  local ext6 = ext5 >> 1;
+>  local ext7 = ext5 ^ ext6;
+>  local ext8:8 = 1;
+>  local ext9 = ext7 & ext8;
+>  local newPF = (ext9 == 0);
+>  PF = (!notzero & PF) | (notzero & newPF);
+>  # AF not implemented
