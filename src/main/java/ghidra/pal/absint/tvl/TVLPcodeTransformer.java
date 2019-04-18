@@ -94,6 +94,7 @@ public class TVLPcodeTransformer {
 	// a COPY PcodeOp -- an assignment of the constant to the output. 
 	protected PcodeOp replaceOutputWithConstant(Pair<Pair<Address,Integer>,PcodeOp> p) {
 		TVLBitVector out0Bv = thisInterp.AbstractState.Lookup(p.y.getOutput());
+		recordOutputValue(out0Bv);
 		Pair<Integer,Long> out0Const =  out0Bv.GetConstantValue();
 		if(out0Const != null) 
 			return MakeCopy(p, MakeConstant(out0Const));
@@ -116,8 +117,10 @@ public class TVLPcodeTransformer {
 
 		// If it was a COPY with constant input, ignore it.
 		if(p.y.getOpcode() == PcodeOp.COPY) {
-			if(input.isConstant())
+			if(input.isConstant()) {
+				recordOutputValue(thisInterp.AbstractState.Lookup(p.y.getOutput()));
 				return null;
+			}
 		}
 
 		// Resolve output as a three-valued bitvector.

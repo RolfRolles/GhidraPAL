@@ -49,11 +49,11 @@ public class Example2ARM extends GhidraScript {
 		Colorizer.Set(tool.getService(ColorizingService.class));
 		
 		// This option adds comments for any branches that it resolves.
-		// runWithAnalysisOptions(TVLAnalysisOutputOptions.ResolvedBranchComments);
+		runWithAnalysisOptions(TVLAnalysisOutputOptions.ResolvedBranchComments);
 
 		// This will add comments with the symbolic values of variables modified on a
 		// given line (e.g. "101?0??0" for an 8-bit quantity that is written).
-		runWithAnalysisOptions(TVLAnalysisOutputOptions.ValueComments);
+		// runWithAnalysisOptions(TVLAnalysisOutputOptions.ValueComments);
 
 		// This will add comments when the PcodeOp objects have changed.
 		// runWithAnalysisOptions(TVLAnalysisOutputOptions.PcodeComments);
