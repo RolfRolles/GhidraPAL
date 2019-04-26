@@ -18,8 +18,12 @@ interface MatrixInitializer {
 // fields, as they have zero-divisors. E.g. 2^(N-1)*2 == 0. That's why I did
 // not use an off-the-shelf matrix package: because the triangularization
 // algorithms aren't applicable to this scenario.
-class OlmSeidlMatrix {
+public class OlmSeidlMatrix {
+
+	// This is actually the exponent N in 2^N of the modulus.
 	final int Modulus;
+	
+	// A bitmask corresponding to the modulus 2^N
 	final int Mask;
 	final int Data[][];
 	final int Rows;
@@ -243,8 +247,8 @@ class OlmSeidlMatrix {
 			lhs[i] = (lhs[i] - rhs[i]) & Mask;
 	}
 	
-	// One of the convenience methods defined in the paper. The largest integer
-	// p such that 2^p divides n.
+	// One of the convenience methods defined in the paper. The largest power 
+	// of two (its exponent) that divides n.
 	int power(int n) {
 		for(int pow = 1; pow <= Modulus; pow++) {
 			if((n & ((1<<pow)-1)) != 0)
@@ -276,91 +280,116 @@ class OlmSeidlMatrix {
 	
 	// The triangularization procedure itself. I found King and Sondergaard's
 	// exposition of it clearer than the original paper. This implementation
-	// is based on that alternative description.
-	//
-	// TODO write better comments for this
+	// is based on that alternative description, though I've gone back and
+	// re-read Olm and Seidl to make sure I understand the algorithm.
 	OlmSeidlMatrix triangular() throws Exception {
-		// Create a new square matrix to be used as output.
-		OlmSeidlMatrix other = new OlmSeidlMatrix(Columns, Columns, Modulus);
+		// Create a new square matrix (|Columns|*|Columns|) for output.
+		OlmSeidlMatrix triangular = new OlmSeidlMatrix(Columns, Columns, Modulus);
 		
 		// Iterate through all of the rows in this matrix.
-		for(int thisR = 0; thisR < Rows; thisR++) {
+		for(int nThisRow = 0; nThisRow < Rows; nThisRow++) {
 			
 			// Get the leading entry for the current row.
-			int l = leading(thisR);
+			int nThisLeadingCol = leading(nThisRow);
 			
 			// Debugging
-			DebugPrint("For(%d) (leading %d)\n", thisR, l);
-			dump();
+			DebugPrint("For(%d) (leading %d)\n", nThisRow, nThisLeadingCol);
+			this.dump();
 			DebugPrint("\n");
-			other.dump();
+			triangular.dump();
 			DebugPrint("\n---\n");
 			
-			// 
-			while(l >= 0) {
-				if(l >= other.Rows) {
-					DebugPrint("While(%d) outside domain %d\n", l, other.Rows);
+			// Stop when nThisRow row has become empty
+			while(nThisLeadingCol >= 0) {
+				
+				// Also, stop if we're outside of the other matrix. This can 
+				// happen if the source matrix has more rows than columns.
+				if(nThisLeadingCol >= triangular.Rows) {
+					DebugPrint("While(%d) outside domain %d\n", nThisLeadingCol, triangular.Rows);
 					break;
 				}
-				DebugPrint("While(%d)\n", l);
+				DebugPrint("While(%d)\n", nThisLeadingCol);
 				
-				// Get the current row, and the other row corresponding to this
-				// leading entry
-				int[] ai = this.row(thisR);
-				int[] ap = other.row(l);
+				// Get the current row (as goverened by the for loop)
+				int[] thisRow = this.row(nThisRow);
 				
-				// Get entry corresponding to leading 
-				int pi_l_ai = ai[l];
-				int pi_l_ap = ap[l];
+				// Also fetch the row from the other matrix indexed by the
+				// leading column.
+				int[] otherRow = triangular.row(nThisLeadingCol);
 				
-				// Get largest divisor numbers for the leading entries
-				int p  = this.power(pi_l_ai);
-				int pp = other.power(pi_l_ap);
+				// Get the elements at the leading entry position from both
+				// rows.
+				int thisLeadingEntry = thisRow[nThisLeadingCol];
+				int otherLeadingEntry = otherRow[nThisLeadingCol];
+				
+				// Get the numbers of times 2 divides the leading entries.
+				int nThisFac2  = this.power(thisLeadingEntry);
+				int nOtherFac2 = triangular.power(otherLeadingEntry);
 				
 				// If the current matrix has a larger power than the other...
-				if(p >= pp) {
+				// Olm-Seidl call this the "reduction step". It will set the
+				// leading entry to zero.
+				if(nThisFac2 >= nOtherFac2) {
 					
 					// Then update the row in this matrix 
-					DebugPrint("While if-then %d %d %d %d\n", pi_l_ai, p, pi_l_ap, pp);
-					scalarVectorProduct(ai, pi_l_ap >> pp);
-					scalarVectorProduct(ap, 1<<(p-pp));
-					vecDiff(ai, ap);
-					setRow(thisR, ai);
+					DebugPrint("While if-then %d %d %d %d\n", thisLeadingEntry, nThisFac2, otherLeadingEntry, nOtherFac2);
+					
+					// Multiply this row by the other leading entry, where its
+					// powers of 2 have been divided out. 
+					scalarVectorProduct(thisRow, otherLeadingEntry >> nOtherFac2);
+					
+					// Scale the other row by the differences in factors of two
+					scalarVectorProduct(otherRow, 1<<(nThisFac2-nOtherFac2));
+					
+					// Subtract the other row from this one
+					vecDiff(thisRow, otherRow);
+					
+					// Replace the current row with the transformed one 
+					this.setRow(nThisRow, thisRow);
 				}
+				
+				// Otherwise, if the triangular matrix has a larger power of 
+				// two...
 				else {
-					DebugPrint("While if-else %d %d %d %d\n", pi_l_ai, p, pi_l_ap, pp);
-					other.setRow(l,  ai);
-					scalarVectorProduct(ap, pi_l_ai >> p);
-					scalarVectorProduct(ai, 1<<(pp-p));
-					vecDiff(ap, ai);
-					if(pp == Modulus && p == 0) {
-						boolean allZero = true;
-						for(int k = 0; k < ap.length; k++) {
-							if(ap[k] != 0) {
-								allZero = false;
-								break;
-							}
-						}
-						DebugPrint("Bad case? %s\n", allZero);
-					}
-					setRow(thisR, ap);					
+					DebugPrint("While if-else %d %d %d %d\n", thisLeadingEntry, nThisFac2, otherLeadingEntry, nOtherFac2);
+					
+					// Begin by replacing the row in the triangular matrix with
+					// this one. The goal is always to reduce the number of
+					// powers of two on the diagonal.
+					triangular.setRow(nThisLeadingCol,  thisRow);
+					
+					// Multiply the other row by this leading entry, where the
+					// factors of two have been divided out.
+					scalarVectorProduct(otherRow, thisLeadingEntry >> nThisFac2);
+					
+					// Scale this row by the differences in factors of two
+					scalarVectorProduct(thisRow, 1<<(nOtherFac2-nThisFac2));
+					
+					// Subtract this row from the other one 
+					vecDiff(otherRow, thisRow);
+					
+					// Update this matrix with the other row
+					this.setRow(nThisRow, otherRow);					
 				}
-				l = leading(thisR);
+				// Get the leading column in the current row, which may still
+				// be the same, or it may have increased if we eliminated the
+				// leading entry.
+				nThisLeadingCol = this.leading(nThisRow);
 			}
-			if(l >= 0) {
-				DebugPrint("t-update %d\n", l);
-				if(l < other.Rows)
-					other.setRow(l, this.row(thisR));
+			// This can only trigger if the while loop above executed "break",
+			// for matrices with more rows than columns.
+			if(nThisLeadingCol >= 0) {
+				DebugPrint("t-update %d\n", nThisLeadingCol);
+				if(nThisLeadingCol < triangular.Rows)
+					// Update the triangular matrix
+					triangular.setRow(nThisLeadingCol, this.row(nThisRow));
 				else {
-					DebugPrint("Row %d is outside domain %d!\n", l, other.Rows);
+					DebugPrint("Row %d is outside domain %d!\n", nThisLeadingCol, triangular.Rows);
 				}
-			}
-			else {
-				DebugPrint("%d leading entry was 0\n", thisR);
 			}
 		}
 		
-		return other;
+		return triangular;
 	}	
 }
 
