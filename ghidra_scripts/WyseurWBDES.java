@@ -22,6 +22,7 @@ import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.pcode.VarnodeTranslator;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -123,7 +124,9 @@ class EmulatorTraceGenerator {
 	MemoryState ms;
 	Emulate Emulator;
 	Program CurrentProgram;
+	HashSet<Address> PrintfAddrs;
 
+	public static final long[] PrintfLocations = {0x04010a5l,0x0401193l,0x04011b9l,0x0401deel,0x0402372l,0x0402388l};
 	public static final String[] Reg32Names  = {"EAX","ECX","EDX","EBX","ESP","EBP","ESI","EDI"};
 	public static final long[]   Reg32Values = {0x28abbcl,0x611856c0l,0x0l,0x0l,0x28ab50l,0x28ac08l,0x200283f0l,0x6119fe9fl};
 	public static final long ProgramBegin = 0x00400000l;
@@ -153,6 +156,8 @@ class EmulatorTraceGenerator {
 		defaultMemoryBank.setChunk(InputBegin, 8, desArr);
 		Emulator.setExecuteAddress(eaBeg);
 		while(!eaEnd.equals(Emulator.getExecuteAddress())) {
+			if(PrintfAddrs.contains(Emulator.getExecuteAddress()))
+				Emulator.setExecuteAddress(Emulator.getExecuteAddress().add(5L));
 			//Printer.printf("Emulating %s\n", Emulator.getExecuteAddress().toString());
 			Emulator.executeInstruction(true);
 		}
@@ -187,6 +192,10 @@ class EmulatorTraceGenerator {
 		
 		// Create the emulator object
 		Emulator = new Emulate(l, ms, bt);
+
+		PrintfAddrs = new HashSet<Address>();
+		for(long printfRef : PrintfLocations)
+			PrintfAddrs.add(defaultSpace.getAddress(printfRef));
 	}	
 }
 
