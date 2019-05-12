@@ -1,4 +1,4 @@
-//Trace generator for wbdes.exe, Wyseur's 2007 challenge
+//Differential computation analysis / correlation power analysis for wbdes.exe, Wyseur's 2007 challenge
 //@author Rolf Rolles
 //@category WBC
 //@keybinding 
@@ -20,10 +20,15 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.pcode.VarnodeTranslator;
-import ghidra.pal.util.Printer;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
+
+import ghidra.pal.util.Printer;
+import ghidra.pal.wbc.des.CryptoBitVector;
+import ghidra.pal.wbc.des.TraceAggregator;
+import ghidra.pal.wbc.des.CPA;
 
 class MyMemFaultHandler implements MemoryFaultHandler {
 	String variety;
@@ -59,10 +64,7 @@ class AccruingMemFaultHandler implements MemoryFaultHandler {
 			try {
 				byte[] chunk = new byte[size];
 				ProgramMem.getBytes(address, chunk);
-				for(int i = 0; i < chunk.length; i++) {
-					//Printer.printf("uninitRead(%s): %x\n", address.add(i).toString(), buf[i]);
-					buf[bufOffset+i] = chunk[i];
-				}
+				System.arraycopy(chunk, 0, buf, bufOffset, size);
 			}
 			catch(MemoryAccessException e) {
 				return false;
@@ -79,7 +81,7 @@ class AccruingMemFaultHandler implements MemoryFaultHandler {
 }
 
 class LoggingMemorizingMemoryBank extends MemoryPageBank {
-	List<Pair<Long, Byte>> Accesses = new ArrayList<Pair<Long, Byte>>();
+	ArrayList<Byte> Accesses = new ArrayList<Byte>();
 	long StackBegin, StackEnd;
 	
 	public LoggingMemorizingMemoryBank(AddressSpace spc, boolean isBigEndian, int ps, MemoryFaultHandler faultHandler, long stackLow, long stackHigh) {
@@ -95,7 +97,7 @@ class LoggingMemorizingMemoryBank extends MemoryPageBank {
 			// Commented-out code ensures that the address is on the stack
 			//if(addrOffset >= StackBegin && addrOffset <= StackEnd) {
 			//	Accesses.add(new Pair<Long,Byte>(addrOffset,res[0]));
-			Accesses.add(new Pair<Long,Byte>(addrOffset,(byte)(addrOffset&0xFFl)));	
+			Accesses.add((byte)(addrOffset&0xFFl));	
 		}
 		return iRes;
 	}
@@ -111,7 +113,7 @@ class LoggingMemorizingMemoryBank extends MemoryPageBank {
 		//	}
 		//}
 		if(size == 1)
-			Accesses.add(new Pair<Long,Byte>(offset,(byte)(offset&0xFFl)));
+			Accesses.add((byte)(offset&0xFFl));
 	}
 }
 
@@ -133,7 +135,7 @@ class EmulatorTraceGenerator {
 	public static final long ExecEnd      = 0x00402381l;
 	
 	void Init() {
-		defaultMemoryBank.Accesses.clear();
+		defaultMemoryBank.Accesses = new ArrayList<Byte>();
 		SleighLanguage l = (SleighLanguage)CurrentProgram.getLanguage();
 		VarnodeTranslator vt = new VarnodeTranslator(CurrentProgram);
 		
@@ -141,7 +143,7 @@ class EmulatorTraceGenerator {
 			ms.setValue(l.getRegister(Reg32Names[i]), Reg32Values[i]);
 	}
 	
-	List<Pair<Long, Byte>> execute(long desInput) {
+	ArrayList<Byte> execute(long desInput) {
 		Address eaBeg = defaultSpace.getAddress(ExecBegin);
 		Address eaEnd = defaultSpace.getAddress(ExecEnd);
 		Init();
@@ -161,7 +163,6 @@ class EmulatorTraceGenerator {
 	{
 		CurrentProgram = currentProgram;
 		SleighLanguage l = (SleighLanguage)currentProgram.getLanguage();
-		VarnodeTranslator vt = new VarnodeTranslator(currentProgram);
 		
 		// Initialize AddressSpace objects
 		defaultSpace  = currentProgram.getAddressFactory().getDefaultAddressSpace();
@@ -190,24 +191,39 @@ class EmulatorTraceGenerator {
 }
 
 public class WyseurWBDES extends GhidraScript {
+	
+	public long bswap64(long desInput) {
+		long ptReversed = 0l;
+		for(int v = 0; v < 8; v++)
+			ptReversed |= ((desInput >> (v*8)) & 0xFFl) << ((7-v)*8);
+		return ptReversed;
+	}
+	
+	Pair<List<ArrayList<Byte>>, List<Long>> getSamples(int numSamples) {
+		List<ArrayList<Byte>> samples = new ArrayList<ArrayList<Byte>>();
+		List<Long> pts = new ArrayList<Long>();
+		EmulatorTraceGenerator et = new EmulatorTraceGenerator(currentProgram);
+		et.Init();
+		for(int i = 0; i < numSamples; i++) {
+			Printer.printf("Collecting sample %d\n", i);
+			if(monitor.isCancelled())
+				break;
+			long desInput = ThreadLocalRandom.current().nextLong();
+			samples.add(et.execute(desInput));
+			pts.add(bswap64(desInput));
+		}
+		return new Pair<List<ArrayList<Byte>>, List<Long>>(samples, pts);
+	}
+	
 	public void run() throws Exception {
 		PluginTool tool = state.getTool();
 		// Initialize the Printer class, so that other classes can print
 		// debug information.
 		Printer.Set(tool.getService(ConsoleService.class));
 		Printer.SetFileOutputPath("c:\\temp\\ghidra-debug2.txt");
-		EmulatorTraceGenerator et = new EmulatorTraceGenerator(currentProgram);
-		et.Init();
-		int numSamples = 100;
-		for(int i = 0; i < numSamples; i++) {
-			if(monitor.isCancelled())
-				break;
-			long desInput = ThreadLocalRandom.current().nextLong();
-			List<Pair<Long, Byte>> l = et.execute(desInput);
-			Printer.printf("%8x ",desInput);
-			String[] strList = l.stream().map((x) -> String.format("%02x",x.y)).toArray(String[]::new);
-			String str = String.join("", strList);
-			Printer.printf("%s\n", str);
-		}
+		Pair<List<ArrayList<Byte>>, List<Long>> samples = getSamples(20);
+		List<CryptoBitVector> points = TraceAggregator.aggregate(samples.x);
+		CPA.correlate(points,samples.y,-1);
 	}
 }
+
