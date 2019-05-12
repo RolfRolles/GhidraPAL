@@ -69,6 +69,18 @@ public final class CFGFactory {
 		return GetCFG(currentProgram, startEa, term);
 	}
 
+	// Allows endEa to be null, in which case it does not create a terminator
+	public static CFG<Pair<Address,Integer>,PcodeOp> GetCFG(Program p, Address startEa, Address endEa, boolean usePseudo) throws Exception {
+		if(usePseudo) {
+			if(endEa == null)
+				return GetPcodePseudoCFG(p, startEa);
+			return GetPcodePseudoCFG(p, startEa, endEa);
+		}
+		if(endEa == null)
+			return GetPcodeCFG(p, startEa);
+		return GetPcodeCFG(p, startEa, endEa);
+	}
+
 	public static CFG<Address,Instruction> GetSingletonCFG(Program currentProgram, Address startEa, CFGExplorationTerminator<Address> term) throws Exception {
 		CFGBuilder<Address,Instruction> b = GetCFGBuilder(currentProgram, term);
 		return b.CreateSingletonCFG(startEa); 		

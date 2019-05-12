@@ -368,12 +368,15 @@ public class TVLAbstractInterpretMultiple {
 	}
 	
 	// Apply the analysis above to a list of locators/entities.
-	protected void DoEntityList(
+	protected List<Pair<Pair<Address,Integer>,PcodeOp>> DoEntityList(
 			List<Pair<Pair<Address,Integer>,PcodeOp>> pcodeLocOpList,
 			List<TVLAbstractGhidraState> states,
 			TVLAnalysisOutputOptions opt) throws VisitorUnimplementedException {
 		List<TVLAbstractInterpretBlock> interps = MapStatesToInterpreters(states);
-		DoEntityListInner(pcodeLocOpList, interps, opt);
+		Pair<List<Pair<Pair<Address,Integer>,PcodeOp>>, ResolvedBranch> rv = DoEntityListInner(pcodeLocOpList, interps, opt);
+		if(rv == null)
+			return pcodeLocOpList;
+		return rv.x;
 	}
 	
 	// Apply the list-level analysis to a vertex's entities. 
