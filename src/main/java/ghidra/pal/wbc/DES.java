@@ -222,6 +222,7 @@ public class DES {
 		long L = (State >> 32) & 0xFFFFFFFFl;
 		long R = State & 0xFFFFFFFFl;
 		long LInverse = PermuteInverse(L);
+		@SuppressWarnings("unused")
 		long NewR = Feistel(1, SubKey, R, LInverse);
 	}
 	long EncryptBlock(long Key, long Block) {

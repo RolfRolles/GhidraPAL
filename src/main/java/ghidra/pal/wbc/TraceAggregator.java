@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
-import ghidra.pal.util.Pair;
 
 public class TraceAggregator {
 	static int allSameLength(List<ArrayList<Byte>> traces) {

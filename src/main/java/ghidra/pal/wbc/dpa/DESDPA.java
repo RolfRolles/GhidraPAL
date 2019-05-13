@@ -25,7 +25,6 @@ public class DESDPA extends PowerAnalysis<DPABundle> {
 	}
 
 	public void analyze(List<CryptoBitVector> points, List<Long> plaintexts, int group) {
-		int nTraces = plaintexts.size();
 		analyzeTrace(points, plaintexts, group, (x) -> new DPABundle(x));
 	}
 }

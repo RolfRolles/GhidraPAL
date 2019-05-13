@@ -13,6 +13,7 @@ class Score { public int x; public double y; Score(int k, double s) { x = k; y =
 public class PowerAnalysis<B extends PABundle>  {
 	int highest_period[];
 	double highest_correlations[][];
+	@SuppressWarnings("unchecked")
 	protected B[][] generateGuesses(List<Long> plaintexts, int group, Function<CryptoBitVector, B> bundle) {
 		DESGuess dg = new DESGuess();
 		int nTraces = plaintexts.size();
