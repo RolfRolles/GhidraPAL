@@ -21,6 +21,11 @@ public class SparseBitVector implements BitVector {
 			Printer.printf("%x->%s\n", ent.getKey(), ent.getValue());
 	}
 	
+	// Should probably move that into the interface
+	public void clear() {
+		Map.clear();
+	}
+	
 	public boolean equals(Object o) {
 		if(this == o)
 			return true;

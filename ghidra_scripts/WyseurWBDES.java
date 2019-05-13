@@ -26,10 +26,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
+import ghidra.pal.util.Pair;
 import ghidra.pal.util.Printer;
-import ghidra.pal.wbc.des.CryptoBitVector;
-import ghidra.pal.wbc.des.TraceAggregator;
-import ghidra.pal.wbc.des.CPA;
+import ghidra.pal.wbc.TraceAggregator;
+import ghidra.pal.wbc.CryptoBitVector;
+import ghidra.pal.wbc.cpa.DESCPA;
+import ghidra.pal.wbc.dpa.DESDPA;
 
 class MyMemFaultHandler implements MemoryFaultHandler {
 	String variety;
@@ -103,7 +105,7 @@ class LoggingMemorizingMemoryBank extends MemoryPageBank {
 		return iRes;
 	}
 
-	public void setChunk​(long offset, int size, byte[] val) {
+	public void setChunk(long offset, int size, byte[] val) {
 		super.setChunk(offset, size, val);
 		//if(offset >= StackBegin && offset <= StackEnd) {
 		//	for(int i = 0; i < size; i++) {
@@ -224,15 +226,35 @@ public class WyseurWBDES extends GhidraScript {
 		return new Pair<List<ArrayList<Byte>>, List<Long>>(samples, pts);
 	}
 	
+	public void doCPA(int nSamples) {
+		Pair<List<ArrayList<Byte>>, List<Long>> samples = getSamples(nSamples);
+		List<CryptoBitVector> points = TraceAggregator.aggregate(samples.x);
+		new DESCPA().analyze(points,samples.y,-1);		
+	}
+	
+	public void doDPA(int nSamplesPer, int nTimes) {
+		List<ArrayList<Byte>> allSamples = new ArrayList<ArrayList<Byte>>();
+		List<Long> allPlaintexts = new ArrayList<Long>();
+		for(int i = 0; i < nTimes; i++) {
+			Printer.printf("DPA(%d): collecting %d more samples\n", i, nSamplesPer);
+			Pair<List<ArrayList<Byte>>, List<Long>> samples = getSamples(nSamplesPer);
+			allSamples.addAll(samples.x);
+			allPlaintexts.addAll(samples.y);
+			List<CryptoBitVector> points = TraceAggregator.aggregate(allSamples);
+			new DESDPA().analyze(points,allPlaintexts,-1);
+		}
+	}
+
 	public void run() throws Exception {
 		PluginTool tool = state.getTool();
 		// Initialize the Printer class, so that other classes can print
 		// debug information.
 		Printer.Set(tool.getService(ConsoleService.class));
 		Printer.SetFileOutputPath("c:\\temp\\ghidra-debug2.txt");
-		Pair<List<ArrayList<Byte>>, List<Long>> samples = getSamples(20);
-		List<CryptoBitVector> points = TraceAggregator.aggregate(samples.x);
-		CPA.correlate(points,samples.y,-1);
+
+		doCPA(20);
+		
+		doDPA(20, 100);
 	}
 }
 
