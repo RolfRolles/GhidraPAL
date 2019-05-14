@@ -260,7 +260,7 @@ public class AES {
 		}
 	}
 	
-	void EncryptInitialize(byte[] Key, byte[] Plaintext, int Alg) {
+	void EncryptInitialize(byte[] Key, byte[] Plaintext, int Alg, boolean genKeys) {
 		switch(Alg)
 		{
 		case AES128:
@@ -282,12 +282,25 @@ public class AES {
 			assert(false);
 		}
 		System.arraycopy(Plaintext,  0,  m_IntermediateState,  0,  4*m_nRows);
-		GenerateSubkeys(Key);
+		if(genKeys)
+			GenerateSubkeys(Key);
 	}
 	
+	void AfterSubBytes() {
+		
+	}
+	
+	public void FirstEncrypt(byte[] Key, byte[] PlainText, int Alg) {
+		EncryptInitialize(Key, PlainText, Alg, false);
+		System.arraycopy(Key,  0,  m_KeyState, 0, 16);
+		AddRoundKey(0);
+		SubBytesPlaintext();
+		AfterSubBytes();
+	}
+
 	public byte[] Encrypt(byte[] Key, byte[] Plaintext, int Alg)
 	{
-		EncryptInitialize(Key, Plaintext, Alg);
+		EncryptInitialize(Key, Plaintext, Alg, true);
 		DumpIntermediateState("BEFORE");
 		AddRoundKey(0);
 		DumpIntermediateState("AddRoundKey(0)");
@@ -343,14 +356,27 @@ public class AES {
 		}
 	}
 	
+	void AfterInvSubBytes() {
+		
+	}
+	public void FirstDecrypt(byte[] Key, byte[] CipherText, int Alg) {
+		EncryptInitialize(Key, CipherText, Alg, false);
+		System.arraycopy(Key,  0,  m_KeyState, m_nRounds*16, 16);
+		AddRoundKey(m_nRounds);
+		InvShiftRows();
+		InvSubBytes();
+		AfterInvSubBytes();
+	}
+	
 	public byte[] Decrypt(byte[] Key, byte[] CipherText, int Alg) {
-		EncryptInitialize(Key, CipherText, Alg);
+		EncryptInitialize(Key, CipherText, Alg, true);
 		DumpIntermediateState("Decrypt BEFORE");
 		AddRoundKey(m_nRounds);
 		DumpIntermediateState("Decrypt AddRoundKey(m_nRounds)");
 		InvShiftRows();
 		DumpIntermediateState("Decrypt InvShiftRows");
 		InvSubBytes();
+		AfterInvSubBytes();
 		DumpIntermediateState("Decrypt InvSubBytes");
 	
 		for(int i = m_nRounds-1; i > 0; i--)
