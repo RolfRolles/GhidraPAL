@@ -218,7 +218,7 @@ public class WyseurWBDES extends GhidraScript {
 		for(int i = 0; i < numSamples; i++) {
 			Printer.printf("Collecting sample %d\n", i);
 			if(monitor.isCancelled())
-				break;
+				return null;
 			long desInput = ThreadLocalRandom.current().nextLong();
 			samples.add(et.execute(desInput));
 			pts.add(bswap64(desInput));
@@ -228,6 +228,8 @@ public class WyseurWBDES extends GhidraScript {
 	
 	public void doCPA(int nSamples) {
 		Pair<List<ArrayList<Byte>>, List<Long>> samples = getSamples(nSamples);
+		if(samples == null)
+			return;
 		List<CryptoBitVector> points = TraceAggregator.aggregate(samples.x);
 		new DESCPA().analyze(points,samples.y,-1);		
 	}
@@ -238,6 +240,8 @@ public class WyseurWBDES extends GhidraScript {
 		for(int i = 0; i < nTimes; i++) {
 			Printer.printf("DPA(%d): collecting %d more samples\n", i, nSamplesPer);
 			Pair<List<ArrayList<Byte>>, List<Long>> samples = getSamples(nSamplesPer);
+			if(samples == null)
+				return;
 			allSamples.addAll(samples.x);
 			allPlaintexts.addAll(samples.y);
 			List<CryptoBitVector> points = TraceAggregator.aggregate(allSamples);
