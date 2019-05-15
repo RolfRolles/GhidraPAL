@@ -250,6 +250,10 @@ public class WyseurWBDES extends GhidraScript {
 	}
 
 	public void run() throws Exception {
+		if (currentProgram == null) {
+			throw new NullPointerException("No program available, exit!\n");
+		}
+
 		PluginTool tool = state.getTool();
 		// Initialize the Printer class, so that other classes can print
 		// debug information.
@@ -257,8 +261,7 @@ public class WyseurWBDES extends GhidraScript {
 		Printer.SetFileOutputPath("c:\\temp\\ghidra-debug2.txt");
 
 		doCPA(20);
-		
+
 		doDPA(20, 100);
 	}
 }
-
