@@ -8,7 +8,7 @@ class FirstSubBytesOutput extends RuntimeException {
 }
 
 public class AESGuess extends AES {
-	void AfterSubBytes(int round) {
+	void AfterSubBytes() {
 		AfterInvSubBytes();
 	}
 	void AfterInvSubBytes() {

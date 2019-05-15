@@ -186,14 +186,14 @@ public class DES {
 	public DES() {
 		SubKeys = new long[16];
 	}
-	void GenerateSubkeys(long key) {
+	void GenerateSubkeys(long key, boolean decrypt) {
 		long KeyState = PermutationChoice1(key);
 		long KSL = (KeyState >> 28) & 0x0FFFFFFFl;
 		long KSR = KeyState & 0x0FFFFFFFl;
 		for(int i = 0; i < LeftRotations.length; ++i) {
 			KSL = RotateLeft(KSL, LeftRotations[i], 28);
 			KSR = RotateLeft(KSR, LeftRotations[i], 28);
-			SubKeys[i] = PermutationChoice2((KSL << 28) | KSR);
+			SubKeys[decrypt ? 15-i : i] = PermutationChoice2((KSL << 28) | KSR);
 		}
 	}
 	void FeistelBegin(int round, long SubKey, long R, long LInverse) {}
@@ -217,6 +217,7 @@ public class DES {
 		FeistelEnd(round, Output, OxorLInv, FinalOutput);
 		return FinalOutput;
 	}
+	// Can be used for either encryption or decryption
 	void IsolatedRound(long SubKey, long Plaintext) {
 		long State = InitialPermutation(Plaintext);
 		long L = (State >> 32) & 0xFFFFFFFFl;
@@ -225,8 +226,8 @@ public class DES {
 		@SuppressWarnings("unused")
 		long NewR = Feistel(1, SubKey, R, LInverse);
 	}
-	long EncryptBlock(long Key, long Block) {
-		GenerateSubkeys(Key);
+	long ProcessBlock(Long Key, long Block, boolean decrypt) {
+		GenerateSubkeys(Key, decrypt);
 		long AfterIP = InitialPermutation(Block);
 		long State = AfterIP;
 		for(int i = 1; i <= 16; i++) {
@@ -240,7 +241,13 @@ public class DES {
 				State = (NewR << 32) | R;
 		}
 		long AfterFP = FinalPermutation(State);
-		return AfterFP;
+		return AfterFP;		
+	}
+	public long EncryptBlock(long Key, long Block) {
+		return ProcessBlock(Key, Block, false);
+	}
+	public long DecryptBlock(long Key, long Block) {
+		return ProcessBlock(Key, Block, true);
 	}
 	public void test() {
 		for(int i = 0; i < FPTable.length; i++) {
@@ -284,10 +291,19 @@ public class DES {
 			}
 		}
 		
-		long end2end = EncryptBlock(0x3032343234363236l, 0x1122334455667788l);
-		if(end2end != 0xc403d32e2bc6cfeeL) {
-			Printer.printf("DES: end-to-end test failed (returned %16x)\n", end2end);
+		long key = 0x3032343234363236l;
+		long pt = 0x1122334455667788l;
+		long ct = 0xc403d32e2bc6cfeel;
+		long end2end = EncryptBlock(key, pt);
+		if(end2end != ct) {
+			Printer.printf("DES: end-to-end test failed (encryption returned %16x, expected %16x)\n", end2end, ct);
 			return;
 		}
+		long dec = DecryptBlock(key, end2end);
+		if(dec != pt) {
+			Printer.printf("DES: end-to-end test failed (decryption returned %16x, expected %16x)\n", dec, pt);
+			return;
+		}
+		
 	}
 }
