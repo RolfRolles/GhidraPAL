@@ -1,66 +1,69 @@
 package ghidra.pal.wbc;
 
 import java.util.Arrays;
-import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 
+import ghidra.pal.util.Pair;
 import ghidra.pal.util.Printer;
 import ghidra.pal.wbc.PABundle;
 
-class Score { public int x; public double y; Score(int k, double s) { x = k; y = s; } }
-public class PowerAnalysis<B extends PABundle>  {
-	int highest_period[];
-	double highest_correlations[][];
+abstract public class PowerAnalysis<B extends PABundle, P>  {
+	protected int highest_period[];
+	protected double highest_correlations[][];
+	public final int nKeys; 
+	public final int nBits; 
+	public PowerAnalysis(int numKeys, int numBits) {
+		nKeys = numKeys;
+		nBits = numBits;
+	}
+	
+	protected Function<CryptoBitVector, B> fnBundle;
+	public void setBundleFn(Function<CryptoBitVector, B> f) {
+		fnBundle = f;
+	}
+	
+	abstract protected Iterable<Pair<Integer,Integer>> createGuess(P text, int sK);
+	
 	@SuppressWarnings("unchecked")
-	protected B[][] generateGuesses(List<Long> plaintexts, int group, Function<CryptoBitVector, B> bundle) {
-		DESGuess dg = new DESGuess();
-		int nTraces = plaintexts.size();
-		B[][] guesses = (B[][])new PABundle[64][];
+	protected B[][] generateGuesses(List<P> texts) {
+		int nTraces = texts.size();
+		B[][] guesses = (B[][])new PABundle[nKeys][];
 		
 		// Iterate through all 2^6 subkeys
-		for(int sK = 0; sK < (1<<6); sK++) {
+		for(int sK = 0; sK < nKeys; sK++) {
 			// Map the plaintexts to the guesses for the current subkey
 			final int k = sK;
-			Long[] subkeyGuesses;
-			if(group == -1)
-				subkeyGuesses = plaintexts.stream().map((x) -> dg.GenerateGuessForAllGroups(x,k)).toArray(Long[]::new);
-			else
-				subkeyGuesses = plaintexts.stream().map((x) -> dg.GenerateGuessForGroup(x,group,k)).toArray(Long[]::new);
-			
-			// Create 32 CPABundle objects, one per bit of output
-			CryptoBitVector[] bitLevel = IntStream.range(0,32).mapToObj((x) -> new CryptoBitVector(nTraces)).toArray(CryptoBitVector[]::new);
+			Iterable<Pair<Integer,Integer>>[] subkeyGuesses = texts.stream().map((x) -> createGuess(x,k)).toArray(Iterable[]::new);
+
+			// Create nBits CPABundle objects, one per bit of output
+			CryptoBitVector[] bitLevel = IntStream.range(0,nBits).mapToObj((x) -> new CryptoBitVector(nTraces)).toArray(CryptoBitVector[]::new);
 			
 			// For each plaintext => SBOX output guess
 			for(int g = 0; g < subkeyGuesses.length; g++) {
-				long guess = subkeyGuesses[g];
-				// For each bit in the guess
-				for(int i = 0; i < 32; i++) {
-					// bitLevel[i]: talking about a particular output bit
-					// .assignBit(g, ...): set that bit to 0/1 depending on output bit
-					bitLevel[i].assignBit(g, ((guess>>i)&1L) == 1L);
-				}				
+				Iterator<Pair<Integer,Integer>> bitIt = subkeyGuesses[g].iterator();
+				while(bitIt.hasNext()) {
+					Pair<Integer,Integer> n = bitIt.next();
+					bitLevel[n.x].assignBit(g, n.y==1);
+				}
 			}
 			// So after this, bitLevel[32] contains CryptoBitVectors of the size of
 			// the number of traces. The contents of the bitvectors are the raw bits
 			// from the guesses.
 			
-			// Precompute hamming weight and denominator
-			//for(int i = 0; i < bitLevel.length; i++)
-			//	bitLevel[i].finalize();
-			
 			// Store that information into the guesses array
-			guesses[sK] = (B[])Arrays.stream(bitLevel).map(bundle).toArray(PABundle[]::new);
+			guesses[sK] = (B[])Arrays.stream(bitLevel).map(fnBundle).toArray(PABundle[]::new);
 		}
 		return guesses;
 	}
 	protected void preAnalysis() {
 		// Allocate array for highest correlations per bit
-		highest_period = new int[32];
+		highest_period = new int[nBits];
 		
 		// Allocate array for highest correlations per bit, per key
-		highest_correlations = new double[32][64];
+		highest_correlations = new double[nBits][nKeys];
 	}
 
 	protected void recordMax(double cij, int nBit, int sK) {
@@ -77,52 +80,32 @@ public class PowerAnalysis<B extends PABundle>  {
 		}		
 	}
 	
-	protected void analyzePoint(B point, B other, int nBit, int sK) { }
-
-	protected void analyzeTrace(List<CryptoBitVector> points, List<Long> plaintexts, int group, Function<CryptoBitVector, B> bundle) {
-		B[][] guesses = generateGuesses(plaintexts, group, bundle);
+	public void analyzeTrace(List<CryptoBitVector> points, List<P> plaintexts) {
+		B[][] guesses = generateGuesses(plaintexts);
 		preAnalysis();
 
 		// Iterate through all trace points, each of which being a CryptoBitVector
 		// of the size of the number of traces.
 		for(CryptoBitVector point : points) {
 			// Create a CPABundle, which precomputes HW/denominator
-			B pointBundle = bundle.apply(point);
+			B pointBundle = fnBundle.apply(point);
 			
 			// Iterate through all bits
-			for(int nBit = 0; nBit < 32; nBit++) {
+			for(int nBit = 0; nBit < nBits; nBit++) {
 				
 				// Iterate through all subkeys
-				for(int sK = 0; sK < (1<<6); sK++) {
-					analyzePoint(pointBundle, guesses[sK][nBit], nBit, sK);
-				}
+				for(int sK = 0; sK < nKeys; sK++)
+					recordMax(pointBundle.compute(guesses[sK][nBit]), nBit, sK);
 			}
 		}
-		postAnalysis();
+		postAnalysisCommon();
+		postAnalysisSpecific();
 	}
-	protected void postAnalysis() {
-		for(int i = 0; i < 32; i++) {
+	protected void postAnalysisCommon() {
+		for(int i = 0; i < nBits; i++) {
 			int hp = highest_period[i];
 			Printer.printf("Best correlation for bit %02d: subkey %02x %f\n", i, hp, highest_correlations[i][hp]);
 		}
-		for(int g = 0; g < 8; g++) {
-			
-			Score[] correlation_scores = IntStream.range(0,64).mapToObj((x) -> new Score(x,0.0)).toArray(Score[]::new);
-			for(int i = 0; i < 4; i++) {
-				for(int sK = 0; sK < (1<<6); sK++) {
-					correlation_scores[sK].y += Math.abs(highest_correlations[g*4+i][sK]);
-				}
-			}
-			class Sortbyy implements Comparator<Score> {
-				public int compare(Score l, Score r) {
-					return l.y == r.y ? 0 : l.y > r.y ? -1 : 1;
-				}
-			}
-			Arrays.sort(correlation_scores, new Sortbyy());
-			for(int i = 0; i < 4; i++) {
-				Printer.printf("Group %d, best key %d: %02x %f\n", g, i, correlation_scores[i].x, correlation_scores[i].y);
-			}
-			Printer.printf("-----\n");
-		}		
 	}
+	protected void postAnalysisSpecific() {}
 }

@@ -1,6 +1,6 @@
 package ghidra.pal.wbc;
 
-public class PABundle {
+abstract public class PABundle {
 	public final CryptoBitVector bv;
 	public PABundle(int nTraces) {
 		bv = new CryptoBitVector(nTraces);
@@ -12,5 +12,6 @@ public class PABundle {
 	public void finalize() {
 
 	}
+	abstract public double compute(PABundle other);
 }
 
