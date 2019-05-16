@@ -30,8 +30,7 @@ import ghidra.pal.util.Pair;
 import ghidra.pal.util.Printer;
 import ghidra.pal.wbc.TraceAggregator;
 import ghidra.pal.wbc.CryptoBitVector;
-import ghidra.pal.wbc.cpa.DESCPA;
-import ghidra.pal.wbc.dpa.DESDPA;
+import ghidra.pal.wbc.PowerAnalysisFactory;
 
 class MyMemFaultHandler implements MemoryFaultHandler {
 	String variety;
@@ -231,7 +230,7 @@ public class WyseurWBDES extends GhidraScript {
 		if(samples == null)
 			return;
 		List<CryptoBitVector> points = TraceAggregator.aggregate(samples.x);
-		new DESCPA().analyze(points,samples.y,-1);		
+		PowerAnalysisFactory.desCPA().analyzeTrace(points,samples.y);		
 	}
 	
 	public void doDPA(int nSamplesPer, int nTimes) {
@@ -245,7 +244,7 @@ public class WyseurWBDES extends GhidraScript {
 			allSamples.addAll(samples.x);
 			allPlaintexts.addAll(samples.y);
 			List<CryptoBitVector> points = TraceAggregator.aggregate(allSamples);
-			new DESDPA().analyze(points,allPlaintexts,-1);
+			PowerAnalysisFactory.desDPA().analyzeTrace(points,allPlaintexts);
 		}
 	}
 
