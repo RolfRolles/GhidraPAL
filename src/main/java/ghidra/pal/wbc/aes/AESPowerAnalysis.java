@@ -5,7 +5,7 @@ import ghidra.pal.wbc.PowerAnalysis;
 
 abstract public class AESPowerAnalysis<B extends PABundle> extends PowerAnalysis<B,Byte[]> {
 	public AESPowerAnalysis(int b) {
-		super(256,b);
+		super(256,b,8,"Intermediate byte");
 	}
 	// So far, the worst parts about Java have involved the interactions 
 	// between generics, primitive types, and arrays. Guess I have to unbox

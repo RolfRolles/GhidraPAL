@@ -1,6 +1,7 @@
 package ghidra.pal.wbc;
 
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Function;
@@ -14,10 +15,14 @@ abstract public class PowerAnalysis<B extends PABundle, P>  {
 	protected int highest_period[];
 	protected double highest_correlations[][];
 	public final int nKeys; 
-	public final int nBits; 
-	public PowerAnalysis(int numKeys, int numBits) {
+	public final int nBits;
+	public final int nBitsPer;
+	public final String quantityDesc;
+	public PowerAnalysis(int numKeys, int numBits, int numBitsPerQuantity, String desc) {
 		nKeys = numKeys;
 		nBits = numBits;
+		nBitsPer = numBitsPerQuantity;
+		quantityDesc = desc;
 	}
 	
 	protected Function<CryptoBitVector, B> fnBundle;
@@ -106,6 +111,24 @@ abstract public class PowerAnalysis<B extends PABundle, P>  {
 			int hp = highest_period[i];
 			Printer.printf("Best correlation for bit %02d: subkey %02x %f\n", i, hp, highest_correlations[i][hp]);
 		}
+		for(int g = 0; g < nBits/nBitsPer; g++) {
+			Score[] correlation_scores = IntStream.range(0,nKeys).mapToObj((x) -> new Score(x,0.0)).toArray(Score[]::new);
+			for(int i = 0; i < nBitsPer; i++) {
+				for(int sK = 0; sK < nKeys; sK++) {
+					correlation_scores[sK].y += Math.abs(highest_correlations[g*nBitsPer+i][sK]);
+				}
+			}
+			class Sortbyy implements Comparator<Score> {
+				public int compare(Score l, Score r) {
+					return l.y == r.y ? 0 : l.y > r.y ? -1 : 1;
+				}
+			}
+			Arrays.sort(correlation_scores, new Sortbyy());
+			for(int i = 0; i < nBitsPer; i++) {
+				Printer.printf("%s %d, best key %d: %02x %f\n", quantityDesc, g, i, correlation_scores[i].x, correlation_scores[i].y);
+			}
+			Printer.printf("-----\n");
+		}		
 	}
 	protected void postAnalysisSpecific() {}
 }
