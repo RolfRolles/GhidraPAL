@@ -32,7 +32,7 @@ abstract public class PowerAnalysis<B extends PABundle, P>  {
 		int nTraces = texts.size();
 		B[][] guesses = (B[][])new PABundle[nKeys][];
 		
-		// Iterate through all 2^6 subkeys
+		// Iterate through all subkeys
 		for(int sK = 0; sK < nKeys; sK++) {
 			// Map the plaintexts to the guesses for the current subkey
 			final int k = sK;
@@ -49,7 +49,7 @@ abstract public class PowerAnalysis<B extends PABundle, P>  {
 					bitLevel[n.x].assignBit(g, n.y==1);
 				}
 			}
-			// So after this, bitLevel[32] contains CryptoBitVectors of the size of
+			// So after this, bitLevel[nBits] contains CryptoBitVectors of the size of
 			// the number of traces. The contents of the bitvectors are the raw bits
 			// from the guesses.
 			

@@ -70,11 +70,11 @@ public class PowerAnalysisFactory {
 		return setDPABundleFn(new AESDecAllPowerAnalysis<DPABundle>(alg));
 	}
 	@SuppressWarnings("unchecked")
-	public static AESPowerAnalysis<CPABundle> aesCPAAll(int alg, boolean enc) {
+	public static AESPowerAnalysis<CPABundle> aesCPA(int alg, boolean enc) {
 		return (AESPowerAnalysis<CPABundle>) aesAll(alg, true, enc);
 	}
 	@SuppressWarnings("unchecked")
-	public static AESPowerAnalysis<DPABundle> aesDPAAll(int alg, boolean enc) {
+	public static AESPowerAnalysis<DPABundle> aesDPA(int alg, boolean enc) {
 		return (AESPowerAnalysis<DPABundle>) aesAll(alg, false, enc);
 	}
 	protected static AESPowerAnalysis<? extends PABundle> aesByte(int b, int alg, boolean useCPA, boolean enc) {
@@ -88,11 +88,11 @@ public class PowerAnalysisFactory {
 		return setDPABundleFn(new AESDecBytePowerAnalysis<DPABundle>(b, alg));
 	}
 	@SuppressWarnings("unchecked")
-	public static AESPowerAnalysis<CPABundle> aesCPAByte(int b, int alg, boolean enc) {
+	public static AESPowerAnalysis<CPABundle> aesCPA(int b, int alg, boolean enc) {
 		return (AESPowerAnalysis<CPABundle>) aesByte(b, alg, true, enc);
 	}
 	@SuppressWarnings("unchecked")
-	public static AESPowerAnalysis<DPABundle> aesDPAByte(int b, int alg, boolean enc) {
+	public static AESPowerAnalysis<DPABundle> aesDPA(int b, int alg, boolean enc) {
 		return (AESPowerAnalysis<DPABundle>) aesByte(b, alg, false, enc);
 	}
 }
