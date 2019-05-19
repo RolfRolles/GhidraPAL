@@ -27,10 +27,10 @@ public class CryptoBitVector extends DenseBitVector {
 	    return (int)l & 0x7f;
 */
 		// For machines with fast multiplications (per Wikipedia)		
- 		l -= (l >> 1) & 0x5555555555555555l;             //put count of each 2 bits into those 2 bits
-	    l = (l & 0x3333333333333333l) + ((l >> 2) & 0x3333333333333333l); //put count of each 4 bits into those 4 bits 
-	    l = (l + (l >> 4)) & 0x0F0F0F0F0F0F0F0Fl;        //put count of each 8 bits into those 8 bits 
-	    return (int)((l * 0x0101010101010101l) >> 56);  //returns left 8 bits of l + (l<<8) + (l<<16) + (l<<24) + ...
+		l -= (l >> 1) & 0x5555555555555555l;             //put count of each 2 bits into those 2 bits
+		l = (l & 0x3333333333333333l) + ((l >> 2) & 0x3333333333333333l); //put count of each 4 bits into those 4 bits 
+		l = (l + (l >> 4)) & 0x0F0F0F0F0F0F0F0Fl;        //put count of each 8 bits into those 8 bits 
+		return (int)((l * 0x0101010101010101l) >> 56);  //returns left 8 bits of l + (l<<8) + (l<<16) + (l<<24) + ...
 	}
 	public int hammingWeight() {
 		int hw = 0;

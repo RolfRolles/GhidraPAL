@@ -32,37 +32,6 @@ abstract public class PowerAnalysis<B extends PABundle, P>  {
 	
 	abstract protected Iterable<Pair<Integer,Integer>> createGuess(P text, int sK);
 	
-	@SuppressWarnings("unchecked")
-	protected B[][] generateGuesses(List<P> texts) {
-		int nTraces = texts.size();
-		B[][] guesses = (B[][])new PABundle[nKeys][];
-		
-		// Iterate through all subkeys
-		for(int sK = 0; sK < nKeys; sK++) {
-			// Map the plaintexts to the guesses for the current subkey
-			final int k = sK;
-			Iterable<Pair<Integer,Integer>>[] subkeyGuesses = texts.stream().map((x) -> createGuess(x,k)).toArray(Iterable[]::new);
-
-			// Create nBits CPABundle objects, one per bit of output
-			CryptoBitVector[] bitLevel = IntStream.range(0,nBits).mapToObj((x) -> new CryptoBitVector(nTraces)).toArray(CryptoBitVector[]::new);
-			
-			// For each plaintext => SBOX output guess
-			for(int g = 0; g < subkeyGuesses.length; g++) {
-				Iterator<Pair<Integer,Integer>> bitIt = subkeyGuesses[g].iterator();
-				while(bitIt.hasNext()) {
-					Pair<Integer,Integer> n = bitIt.next();
-					bitLevel[n.x].assignBit(g, n.y==1);
-				}
-			}
-			// So after this, bitLevel[nBits] contains CryptoBitVectors of the size of
-			// the number of traces. The contents of the bitvectors are the raw bits
-			// from the guesses.
-			
-			// Store that information into the guesses array
-			guesses[sK] = (B[])Arrays.stream(bitLevel).map(fnBundle).toArray(PABundle[]::new);
-		}
-		return guesses;
-	}
 	protected void preAnalysis() {
 		// Allocate array for highest correlations per bit
 		highest_period = new int[nBits];
@@ -85,26 +54,43 @@ abstract public class PowerAnalysis<B extends PABundle, P>  {
 		}		
 	}
 	
-	public void analyzeTrace(List<CryptoBitVector> points, List<P> plaintexts) {
-		B[][] guesses = generateGuesses(plaintexts);
+	public void analyzeTrace(List<CryptoBitVector> points, List<P> texts) {
 		preAnalysis();
 
-		// Iterate through all trace points, each of which being a CryptoBitVector
-		// of the size of the number of traces.
-		for(CryptoBitVector point : points) {
-			// Create a CPABundle, which precomputes HW/denominator
-			B pointBundle = fnBundle.apply(point);
+		int nTraces = texts.size();
+		@SuppressWarnings("unchecked")
+		B[] pointsMapped = (B[])points.stream().map(fnBundle).toArray(PABundle[]::new);
+		
+		// Iterate through all subkeys
+		for(int sK = 0; sK < nKeys; sK++) {
+			// Map the plaintexts to the guesses for the current subkey
+			final int k = sK;
+			@SuppressWarnings("unchecked")
+			Iterable<Pair<Integer,Integer>>[] subkeyGuesses = texts.stream().map((x) -> createGuess(x,k)).toArray(Iterable[]::new);
+
+			// Create nBits CPABundle objects, one per bit of output
+			CryptoBitVector[] bitLevel = IntStream.range(0,nBits).mapToObj((x) -> new CryptoBitVector(nTraces)).toArray(CryptoBitVector[]::new);
 			
-			// Iterate through all bits
-			for(int nBit = 0; nBit < nBits; nBit++) {
-				
-				// Iterate through all subkeys
-				for(int sK = 0; sK < nKeys; sK++)
-					recordMax(pointBundle.compute(guesses[sK][nBit]), nBit, sK);
+			// For each plaintext => SBOX output guess
+			for(int g = 0; g < subkeyGuesses.length; g++) {
+				Iterator<Pair<Integer,Integer>> bitIt = subkeyGuesses[g].iterator();
+				while(bitIt.hasNext()) {
+					Pair<Integer,Integer> n = bitIt.next();
+					bitLevel[n.x].assignBit(g, n.y==1);
+				}
+			}
+			// So after this, bitLevel[nBits] contains CryptoBitVectors of the size of
+			// the number of traces. The contents of the bitvectors are the raw bits
+			// from the guesses.
+			
+			// Store that information into the guesses array
+			for(int bitNum = 0; bitNum < bitLevel.length; bitNum++) {
+				B blB = fnBundle.apply(bitLevel[bitNum]);
+				for(B point : pointsMapped) 
+					recordMax(point.compute(blB), bitNum, sK);
 			}
 		}
 		postAnalysisCommon();
-		postAnalysisSpecific();
 	}
 	protected void postAnalysisCommon() {
 		for(int i = 0; i < nBits; i++) {
@@ -130,5 +116,4 @@ abstract public class PowerAnalysis<B extends PABundle, P>  {
 			Printer.printf("-----\n");
 		}		
 	}
-	protected void postAnalysisSpecific() {}
 }
