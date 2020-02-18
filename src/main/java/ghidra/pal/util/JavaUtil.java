@@ -6,7 +6,7 @@ public final class JavaUtil {
 	// int/long issue. I don't like that very much.
 	static public boolean CompareLongs(long l1, long l2)
 	{
-		return new Long(l1).equals(new Long(l2));
+		 return Long.valueOf(l1).equals(l2);
 	}
 	public static byte[] hexStringToByteArray(String s) {
 		byte[] b = new byte[s.length() / 2];
