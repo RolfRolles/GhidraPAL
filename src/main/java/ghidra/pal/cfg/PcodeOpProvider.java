@@ -112,7 +112,7 @@ public class PcodeOpProvider<T extends Instruction> implements CFGVertexDetailPr
 		
 		// If the location is not within the PcodeOp block, return null.
 		PcodeOp[] pcode = instr.getPcode();
-		if(addr.y > pcode.length)
+		if(addr.y >= pcode.length)
 			return null;
 		
 		// Get the PcodeOp, its Raw counterpart, and behavior.
