@@ -23,15 +23,18 @@ public class PcodeOpProvider<T extends Instruction> implements CFGVertexDetailPr
 		
 	// Common method to compute the location for the fall-through.
 	Pair<Address,Integer> getFallthruLoc(Pair<Address,Integer> curLoc, Instruction insn) {
-		int pcodeLen = insn.getPcode().length;
-		int insnLen = insn.getLength();
 		int nextLoc = curLoc.y+1;
+		Address nextAddr = curLoc.x;
 		// If we've reached the end of the pcode for this Instruction, move on
 		// to the next one.
-		if(nextLoc >= pcodeLen)
-			return new Pair<Address,Integer>(curLoc.x.addWrap(insnLen),0);
+		
+		while (nextLoc >= insn.getPcode().length) { // handle nops (like in AARCH64)
+			nextLoc = 0;
+			nextAddr = nextAddr.addWrap(insn.getLength());
+			insn = Cache.getInstruction(nextAddr);
+		}
 		// Otherwise, increment the pcode index and return a new location.
-		return new Pair<Address,Integer>(curLoc.x, nextLoc);
+		return new Pair<Address,Integer>(nextAddr, nextLoc);
 	}
 	
 	// Common method to compute the location for the taken destination. 
