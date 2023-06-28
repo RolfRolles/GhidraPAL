@@ -52,7 +52,7 @@ public class PcodeOpVisitor<T> {
 		boolean isConstant   = varnode.isConstant();	 
 		boolean isHash       = varnode.isHash();
 		boolean isInput      = varnode.isInput();	 
-		boolean isPersistant = varnode.isPersistant();	 
+		boolean isPersistant = varnode.isPersistent();	 
 		boolean isRegister   = varnode.isRegister();	 
 		boolean isUnaffected = varnode.isUnaffected();	 
 		boolean isUnique     = varnode.isUnique();	
